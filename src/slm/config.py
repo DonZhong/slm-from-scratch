@@ -14,15 +14,15 @@ class TinyGPTConfig:
 
     dropout: float = 0.1
 
-    def __post_init_(self):
+    def __post_init__(self):
         if self.vocab_size <= 0:
-            raise ValueError("vocab_size must be greater than 9")
+            raise ValueError("vocab_size must be greater than 0")
 
         if self.d_model % self.n_heads != 0:
             raise ValueError(
                 "d_model must be divisivle b n_heads"
             )
 
-@property
-def head_dim(self) -> int:
-    return self.d_model // self.n_heads
+    @property
+    def head_dim(self) -> int:
+        return self.d_model // self.n_heads
