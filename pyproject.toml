@@ -11,3 +11,8 @@ requires-python = ">=3.12"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]

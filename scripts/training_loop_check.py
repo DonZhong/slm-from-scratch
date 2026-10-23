@@ -2,35 +2,13 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from slm.config import TinyGPTConfig
 from slm.data import NextTokenDataset
 from slm.model import TinyGPT
 from slm.tokenizer import CharacterTokenizer
-
-
-def compute_loss(
-    model: TinyGPT,
-    input_ids: torch.Tensor,
-    target_ids: torch.Tensor,
-) -> torch.Tensor:
-    logits = model(input_ids)
-
-    batch_size, sequence_length, vocab_size = (
-        logits.shape
-    )
-
-    return F.cross_entropy(
-        logits.reshape(
-            batch_size * sequence_length,
-            vocab_size,
-        ),
-        target_ids.reshape(
-            batch_size * sequence_length
-        ),
-    )
+from slm.training import train_step
 
 
 def main():
@@ -88,20 +66,12 @@ def main():
             input_ids = input_ids.to(device)
             target_ids = target_ids.to(device)
 
-            optimizer.zero_grad(
-                set_to_none=True
+            loss = train_step(
+                model=model,
+                optimizer=optimizer,
+                input_ids=input_ids,
+                targets=target_ids,
             )
-
-            loss = compute_loss(
-                model,
-                input_ids,
-                target_ids,
-            )
-
-            loss.backward()
-
-            optimizer.step()
-
             token_count = target_ids.numel()
 
             total_loss += (
@@ -150,7 +120,7 @@ def main():
     )
 
     checkpoint_path = (
-        checkpoint_dir / "tinygpt-toy-v1.pt"
+        checkpoint_dir / "tinygpt-toy-training-refactor-v1.pt"
     )
 
     checkpoint = {

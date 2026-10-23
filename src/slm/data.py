@@ -1,5 +1,7 @@
+
 import torch
 from torch.utils.data import Dataset
+
 
 class NextTokenDataset(Dataset):
     def __init__(
@@ -41,3 +43,36 @@ class NextTokenDataset(Dataset):
         ]
 
         return input_ids, target_ids
+
+
+def split_text(
+    text: str,
+    *,
+    train_fraction: float,
+    context_length: int,
+) -> tuple[str, str]:
+    if not 0.0 < train_fraction < 1.0:
+        raise ValueError(
+            "train_fraction must be between 0 and 1"
+        )
+
+    if context_length <= 0:
+        raise ValueError(
+            "context_length must be positive"
+        )
+
+    split_index = int(len(text) * train_fraction)
+
+    train_text = text[:split_index]
+    val_text = text[split_index:]
+
+    if (
+        len(train_text) <= context_length
+        or len(val_text) <= context_length
+    ):
+        raise ValueError(
+            "Both splits must contain more characters "
+            "than context_length"
+        )
+
+    return train_text, val_text
