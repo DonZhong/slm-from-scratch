@@ -72,6 +72,40 @@ jobs:
       - name: Check database-backed training-runs API
         run: python3 scripts/check_training_runs_api.py
 
+      - name: Seed training-metrics query API records
+        run: |
+          docker compose exec -T postgres sh -c \
+            'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+          WITH new_run AS (
+              INSERT INTO training_runs
+                  (name, model_name, dataset_name, status, config)
+              VALUES
+                  ('ci-training-metrics-query-smoke',
+                   'TinyGPT', 'synthetic-query-ci',
+                   'running', '{}'::jsonb)
+              RETURNING id
+          )
+          INSERT INTO training_metrics
+              (run_id, global_step, epoch, train_loss,
+               val_loss, learning_rate, tokens_per_second)
+          SELECT id, 1, 1, 3.1, 3.0, 0.0003, 120.5 FROM new_run
+          UNION ALL
+          SELECT id, 2, 1, 2.9, 2.8, 0.0003, NULL FROM new_run
+          UNION ALL
+          SELECT id, 3, 1, 2.7, NULL, 0.0003, 115.0 FROM new_run;
+
+          INSERT INTO training_runs
+              (name, model_name, dataset_name, status, config)
+          VALUES
+              ('ci-training-metrics-query-empty',
+               'TinyGPT', 'synthetic-empty-ci',
+               'created', '{}'::jsonb);
+          SQL
+
+      - name: Check training-metrics query API
+        run: python3 scripts/check_training_metrics_api.py
+
+
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --tail=100 backend postgres
