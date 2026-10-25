@@ -571,6 +571,170 @@ drogon::app().registerHandler(
 );
 
 
+    // GET /api/training-runs/{run_id}/metrics
+    // 查询一次训练实验的历史指标
+    drogon::app().registerHandler(
+        "/api/training-runs/{run_id}/metrics",
+        [dbClient](
+            const drogon::HttpRequestPtr&,
+            std::function<void(
+                const drogon::HttpResponsePtr&
+            )>&& callback,
+            const std::string& runIdText
+        ) {
+            auto reply = std::move(callback);
+
+            // 统一返回 JSON 错误
+            auto sendError = [reply](
+                auto status,
+                const std::string& message
+            ) {
+                Json::Value body;
+                body["status"] = "error";
+                body["message"] = message;
+
+                auto response =
+                    drogon::HttpResponse::newHttpJsonResponse(body);
+
+                response->setStatusCode(status);
+                reply(response);
+            };
+
+            // 1. 校验训练实验 ID
+            int64_t runId = 0;
+
+            if (!parsePositiveInt64(runIdText, runId)) {
+                sendError(
+                    drogon::k400BadRequest,
+                    "Invalid training run ID"
+                );
+                return;
+            }
+
+            // 2. 先确认训练实验存在
+            dbClient->execSqlAsync(
+                "SELECT id FROM training_runs WHERE id = $1",
+
+                [dbClient, reply, sendError, runId](
+                    const drogon::orm::Result& runResult
+                ) {
+                    if (runResult.empty()) {
+                        sendError(
+                            drogon::k404NotFound,
+                            "Training run not found"
+                        );
+                        return;
+                    }
+
+                    // 3. 查询最近 1000 条指标，
+                    //    最终按 global_step 从小到大返回。
+                    dbClient->execSqlAsync(
+                        "SELECT id, global_step, epoch, train_loss, "
+                        "val_loss, learning_rate, tokens_per_second "
+                        "FROM ("
+                        " SELECT id, global_step, epoch, train_loss, "
+                        " val_loss, learning_rate, tokens_per_second "
+                        " FROM training_metrics "
+                        " WHERE run_id = $1 "
+                        " ORDER BY global_step DESC "
+                        " LIMIT 1000"
+                        ") AS recent_metrics "
+                        "ORDER BY global_step ASC",
+
+                        [reply, runId](
+                            const drogon::orm::Result& result
+                        ) {
+                            Json::Value body;
+                            body["status"] = "ok";
+                            body["run_id"] =
+                                static_cast<Json::Int64>(runId);
+                            body["count"] =
+                                static_cast<Json::Int64>(result.size());
+                            body["items"] =
+                                Json::Value(Json::arrayValue);
+
+                            // 4. 将数据库记录转换成 JSON
+                            for (const auto& row : result) {
+                                Json::Value item;
+
+                                item["id"] =
+                                    static_cast<Json::Int64>(
+                                        row["id"].as<int64_t>()
+                                    );
+
+                                item["global_step"] =
+                                    static_cast<Json::Int64>(
+                                        row["global_step"].as<int64_t>()
+                                    );
+
+                                item["epoch"] =
+                                    row["epoch"].as<int>();
+
+                                item["train_loss"] =
+                                    row["train_loss"].as<double>();
+
+                                item["val_loss"] =
+                                    row["val_loss"].isNull()
+                                    ? Json::Value(Json::nullValue)
+                                    : Json::Value(
+                                        row["val_loss"].as<double>()
+                                    );
+
+                                item["learning_rate"] =
+                                    row["learning_rate"].as<double>();
+
+                                item["tokens_per_second"] =
+                                    row["tokens_per_second"].isNull()
+                                    ? Json::Value(Json::nullValue)
+                                    : Json::Value(
+                                        row["tokens_per_second"].as<double>()
+                                    );
+
+                                body["items"].append(item);
+                            }
+
+                            reply(
+                                drogon::HttpResponse::newHttpJsonResponse(
+                                    body
+                                )
+                            );
+                        },
+
+                        [sendError](
+                            const drogon::orm::DrogonDbException&
+                        ) {
+                            LOG_ERROR
+                                << "Failed to query training metrics";
+
+                            sendError(
+                                drogon::k503ServiceUnavailable,
+                                "Unable to retrieve training metrics"
+                            );
+                        },
+
+                        runId
+                    );
+                },
+
+                [sendError](
+                    const drogon::orm::DrogonDbException&
+                ) {
+                    LOG_ERROR
+                        << "Failed to check training run";
+
+                    sendError(
+                        drogon::k503ServiceUnavailable,
+                        "Unable to retrieve training metrics"
+                    );
+                },
+
+                runId
+            );
+        },
+        {drogon::Get}
+    );
+
+
     drogon::app().addListener("0.0.0.0", 8080).run();
 
     return 0;
