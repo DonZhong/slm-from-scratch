@@ -202,3 +202,47 @@ Large datasets and checkpoints should remain outside the Git repository, prefera
 - Prepare Chinese text datasets.
 - Explore instruction tuning and conversational training.
 - Study custom tensor operations, C++ extensions, CUDA kernels, and Triton.
+
+
+
+## Training Monitor Platform V1
+
+平台后端使用 C++17、Drogon 和 Docker Compose。
+
+### 启动后端
+
+```bash
+docker compose build backend
+docker compose up -d backend
+```
+
+### 验证接口
+
+```bash
+curl -i http://127.0.0.1:8080/api/health
+python scripts/check_backend_health.py
+```
+
+预期健康接口返回：
+
+```json
+{
+  "service": "slm-platform-backend",
+  "status": "ok"
+}
+```
+
+### 查看日志
+
+```bash
+docker compose logs --tail=50 backend
+```
+
+### 停止服务
+
+```bash
+docker compose down
+```
+
+当前已实现后端健康检查。PostgreSQL、React 前端、
+训练监控和 TinyGPT Chat 尚未接入。
