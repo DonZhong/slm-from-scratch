@@ -15,15 +15,33 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
+    # 仅用于本次 CI 临时数据库，不是生产凭据。
+    env:
+      SLM_DB_NAME: slm_platform
+      SLM_DB_USER: slm_app
+      SLM_DB_PASSWORD: ci-only-password
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
       - name: Build C++ backend
         run: docker compose build backend
 
+      - name: Start PostgreSQL
+        run: docker compose up -d --wait postgres
+
+      - name: Apply initial database schema
+        run: |
+          docker compose exec -T postgres sh -c \
+            'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+            < platform/database/migrations/001_initial_schema.sql
+
       - name: Start backend
-        run: docker compose up -d backend
+        run: docker compose up -d --wait backend
 
       - name: Check backend health
         run: |
@@ -33,11 +51,30 @@ jobs:
             fi
             sleep 2
           done
+
+          echo "Backend health check failed"
           exit 1
+
+      - name: Seed training-run API test record
+        run: |
+          docker compose exec -T postgres sh -c \
+            'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+          INSERT INTO training_runs
+              (name, model_name, dataset_name, status, config)
+          VALUES
+              ('ci-training-runs-smoke',
+               'TinyGPT',
+               'synthetic-ci',
+               'created',
+               '{}'::jsonb);
+          SQL
+
+      - name: Check database-backed training-runs API
+        run: python3 scripts/check_training_runs_api.py
 
       - name: Show logs on failure
         if: failure()
-        run: docker compose logs --tail=100 backend
+        run: docker compose logs --tail=100 backend postgres
 
       - name: Stop containers
         if: always()
