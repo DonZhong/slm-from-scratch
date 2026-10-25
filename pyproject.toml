@@ -16,3 +16,7 @@ where = ["src"]
 dev = [
     "pytest>=8",
 ]
+
+monitor = [
+    "psutil>=6.0",
+]
