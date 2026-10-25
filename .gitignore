@@ -32,3 +32,5 @@ checkpoints/
 # Monitoring frontend generated files
 monitoring/frontend/dist/
 monitoring/frontend/node_modules/
+
+/.env
