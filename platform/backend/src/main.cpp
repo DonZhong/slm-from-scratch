@@ -1,6 +1,6 @@
 #include <cmath>
 #include <optional>
-
+#include "hardware_monitor_routes.h"
 #include <drogon/drogon.h>
 #include <drogon/orm/DbClient.h>
 
@@ -734,7 +734,7 @@ drogon::app().registerHandler(
         {drogon::Get}
     );
 
-
+    slm_hardware::registerHardwareMonitorRoutes(dbClient);
     drogon::app().addListener("0.0.0.0", 8080).run();
 
     return 0;
