@@ -1,0 +1,44 @@
+
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build C++ backend
+        run: docker compose build backend
+
+      - name: Start backend
+        run: docker compose up -d backend
+
+      - name: Check backend health
+        run: |
+          for attempt in $(seq 1 15); do
+            if python3 scripts/check_backend_health.py; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --tail=100 backend
+
+      - name: Stop containers
+        if: always()
+        run: docker compose down
