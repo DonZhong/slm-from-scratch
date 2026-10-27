@@ -216,3 +216,82 @@ python scripts/train.py \
 模型训练和推理继续使用 Python / PyTorch。
 
 C++ 后端负责平台业务、API 和服务通信。
+
+## 10. Training Monitor API
+
+### 10.1 Architecture
+
+训练过程由 Python + PyTorch 执行，C++ Drogon 后端负责实验管理和指标写入，PostgreSQL 负责持久化实验与训练指标。
+
+```text
+PyTorch Training Script
+        |
+        | HTTP + JSON
+        v
+C++ Drogon Backend
+        |
+        v
+PostgreSQL
+        ^
+        |
+React + TypeScript Monitor
+```
+
+### 10.2 API Endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/health` | 检查后端健康状态 |
+| GET | `/api/db/health` | 检查数据库连接 |
+| POST | `/api/training-runs` | 创建训练实验 |
+| GET | `/api/training-runs` | 查询实验列表 |
+| POST | `/api/training-runs/{run_id}/status` | 更新实验状态 |
+| POST | `/api/training-runs/{run_id}/metrics` | 写入训练指标 |
+| GET | `/api/training-runs/{run_id}/metrics` | 查询实验指标 |
+
+创建实验时，`name` 和 `dataset_name` 为必填字段，`model_name` 可选，默认值为 `TinyGPT`。
+
+训练指标包含：
+
+- `global_step`：全局训练步数
+- `epoch`：当前训练轮次
+- `train_loss`：当前 Step 的训练损失
+- `val_loss`：验证损失，可为空
+- `learning_rate`：当前学习率
+- `tokens_per_second`：每秒处理的目标 Token 数，可为空
+
+### 10.3 Start a Monitored Training Run
+
+```bash
+python scripts/train.py \
+  --epochs 3 \
+  --batch-size 8 \
+  --learning-rate 0.0005 \
+  --max-steps 5 \
+  --api-base-url http://127.0.0.1:8080 \
+  --run-name pytorch-metrics-smoke-test
+```
+
+不提供 `--api-base-url` 时，训练脚本不创建后端实验，也不向后端写入训练指标。
+
+正常完成训练后，脚本将实验状态更新为 `completed`。
+
+### 10.4 Checkpoint Policy
+
+Checkpoint 默认不保存。
+
+只有显式指定 `--checkpoint-path` 时，脚本才写入模型、优化器状态及相关训练元数据。
+
+提交代码、更新文档与保存模型 Checkpoint 是三件不同的事。
+
+### 10.5 Validation
+
+```bash
+python -m py_compile scripts/train.py
+python -m pytest tests/ -q
+git diff --check
+```
+
+后端修改后，还应重新构建 Docker 镜像并验证 HTTP API。
+
+自动化测试结果以实际执行输出为准。

@@ -6,89 +6,58 @@
 在现有 TinyGPT 训练与推理代码的基础上，
 逐步建设训练监控和模型聊天平台。
 
-技术栈：
+## 2.技术栈：
 
-- Python + PyTorch：模型训练与推理
-- C++17 + Drogon：HTTP 后端
-- PostgreSQL：实验与训练指标存储（待开发）
-- React + TypeScript：Web 前端（待开发）
-- Docker Compose：容器管理
+Python + PyTorch：TinyGPT 训练与评估
 
-## 2. 已实现功能
+C++17 + Drogon：HTTP API 与实验管理
 
-### C++ Drogon 后端
+PostgreSQL：训练实验及指标持久化
 
-接口：
+React + TypeScript + Vite：Web 监控前端
 
-GET /api/health
+Docker Compose：本地服务编排
 
-监听端口：
+## 3.已实现功能
 
-8080
+后端健康检查与数据库健康检查。
 
-正常响应：
+创建训练实验并查询实验列表。
 
-```json
-{
-  "service": "slm-platform-backend",
-  "status": "ok"
-}
-```
+更新训练实验状态。
 
-## 3. 本地运行
+写入和查询训练指标。
 
-构建镜像：
+Python 训练脚本通过 HTTP API 接入实验管理。
 
-```bash
-docker compose build backend
-```
+采集训练损失、验证损失、学习率及 Token 吞吐量。
 
-启动后端：
+前端 Vite 将 /api 请求代理至 Docker 网络中的 backend:8080。
 
-```bash
-docker compose up -d backend
-```
+## 4.本地验证
 
-测试接口：
+启动服务：
 
-```bash
-python scripts/check_backend_health.py
-```
+docker compose up -d --build backend frontend
 
-查看日志：
+检查服务状态：
 
-```bash
-docker compose logs --tail=50 backend
-```
+docker compose ps
 
-停止服务：
+验证前端 API 代理：
 
-```bash
-docker compose down
-```
+curl -i http://127.0.0.1:5173/api/health
 
-## 4. 自动化测试
+验证实验指标：
 
-Python：
+curl -sS \
+  http://127.0.0.1:5173/api/training-runs/16/metrics \
+  | python -m json.tool
 
-```bash
-python -m pytest -q
-```
+注意：示例中的实验 ID 必须替换为数据库中实际存在的 ID。
 
-C++ 后端：
+运行自动化测试：
 
-- GitHub Actions 构建 Docker 镜像
-- 启动 Drogon 容器
-- 调用 HTTP 健康接口
-- 验证 HTTP 200 与 JSON 响应
+python -m pytest tests/ -q
 
-GitHub CI 结果以实际运行结果为准。
-
-## 5. 后续计划
-
-1. PostgreSQL 数据库连接
-2. React + TypeScript 前端
-3. 实时训练指标采集
-4. 自训练 TinyGPT 模型推理与聊天
-5. WebSocket 实时通信
-```
+每次提交的测试结果应以该次实际执行记录为准。
