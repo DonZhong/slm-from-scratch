@@ -141,14 +141,30 @@ class CausalSelfAttention(nn.Module):
             self.head_dim,
         ).transpose(1, 2)
 
+        # 第一步：计算注意力分数
         attention_scores = (
             query @ key.transpose(-2, -1)
         ) / math.sqrt(self.head_dim)
 
+        # 第二步：获取因果掩码
         mask = self.causal_mask[
             :sequence_length,
             :sequence_length,
         ]
+
+        # 第三步：屏蔽未来 token
+        attention_scores = attention_scores.masked_fill(
+            ~mask,
+            float("-inf"),
+        )
+
+        # 第四步：将分数转换为注意力权重
+        attention_weights = torch.softmax(
+            attention_scores,
+            dim=-1,
+        )
+
+
 
         attention_weights = torch.softmax(
             attention_scores,
