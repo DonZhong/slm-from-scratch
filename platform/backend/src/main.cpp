@@ -135,6 +135,152 @@ int main() {
     );
 
 
+        // POST /api/training-runs
+        // 创建一次训练实验
+        drogon::app().registerHandler(
+            "/api/training-runs",
+            [dbClient](
+                const drogon::HttpRequestPtr& request,
+                std::function<void(
+                    const drogon::HttpResponsePtr&
+                )>&& callback
+            ) {
+                auto reply = std::move(callback);
+
+                // 1. 读取 JSON 请求体
+                const auto json = request->getJsonObject();
+
+                if (!json || !json->isObject()) {
+                    Json::Value body;
+                    body["status"] = "error";
+                    body["message"] = "A JSON object is required";
+
+                    auto response =
+                        drogon::HttpResponse::newHttpJsonResponse(body);
+
+                    response->setStatusCode(drogon::k400BadRequest);
+                    reply(response);
+                    return;
+                }
+
+                const auto& data = *json;
+
+                // 2. 校验必填字段
+                if (
+                    !data.isMember("name") ||
+                    !data["name"].isString() ||
+                    data["name"].asString().empty() ||
+                    !data.isMember("dataset_name") ||
+                    !data["dataset_name"].isString() ||
+                    data["dataset_name"].asString().empty()
+                ) {
+                    Json::Value body;
+                    body["status"] = "error";
+                    body["message"] =
+                        "name and dataset_name are required";
+
+                    auto response =
+                        drogon::HttpResponse::newHttpJsonResponse(body);
+
+                    response->setStatusCode(drogon::k400BadRequest);
+                    reply(response);
+                    return;
+                }
+
+                const std::string name =
+                    data["name"].asString();
+
+                const std::string datasetName =
+                    data["dataset_name"].asString();
+
+                // 3. model_name 是可选字段
+                std::string modelName = "TinyGPT";
+
+                if (data.isMember("model_name")) {
+                    if (
+                        !data["model_name"].isString() ||
+                        data["model_name"].asString().empty()
+                    ) {
+                        Json::Value body;
+                        body["status"] = "error";
+                        body["message"] =
+                            "model_name must be a non-empty string";
+
+                        auto response =
+                            drogon::HttpResponse::newHttpJsonResponse(body);
+
+                        response->setStatusCode(drogon::k400BadRequest);
+                        reply(response);
+                        return;
+                    }
+
+                    modelName = data["model_name"].asString();
+                }
+
+                // 4. 插入数据库并取回自动生成的实验 ID
+                dbClient->execSqlAsync(
+                    "INSERT INTO training_runs "
+                    "(name, model_name, dataset_name) "
+                    "VALUES ($1, $2, $3) "
+                    "RETURNING id, name, model_name, dataset_name, "
+                    "status, created_at::text AS created_at",
+
+                    [reply](
+                        const drogon::orm::Result& result
+                    ) {
+                        const auto& row = result[0];
+
+                        Json::Value body;
+                        body["status"] = "ok";
+                        body["item"]["id"] =
+                            static_cast<Json::Int64>(
+                                row["id"].as<int64_t>()
+                            );
+                        body["item"]["name"] =
+                            row["name"].as<std::string>();
+                        body["item"]["model_name"] =
+                            row["model_name"].as<std::string>();
+                        body["item"]["dataset_name"] =
+                            row["dataset_name"].as<std::string>();
+                        body["item"]["status"] =
+                            row["status"].as<std::string>();
+                        body["item"]["created_at"] =
+                            row["created_at"].as<std::string>();
+
+                        reply(
+                            drogon::HttpResponse::newHttpJsonResponse(body)
+                        );
+                    },
+
+                    [reply](
+                        const drogon::orm::DrogonDbException&
+                    ) {
+                        LOG_ERROR << "Failed to create training run";
+
+                        Json::Value body;
+                        body["status"] = "error";
+                        body["message"] =
+                            "Unable to create training run";
+
+                        auto response =
+                            drogon::HttpResponse::newHttpJsonResponse(body);
+
+                        response->setStatusCode(
+                            drogon::k503ServiceUnavailable
+                        );
+
+                        reply(response);
+                    },
+
+                    name,
+                    modelName,
+                    datasetName
+                );
+            },
+            {drogon::Post}
+        );
+
+
     // 训练实验列表 API
     drogon::app().registerHandler(
         "/api/training-runs",
@@ -214,361 +360,580 @@ int main() {
         {drogon::Get}
     );
 
-// POST /api/training-runs/{run_id}/metrics
-// 写入一次训练指标
-drogon::app().registerHandler(
-    "/api/training-runs/{run_id}/metrics",
-    [dbClient](
-        const drogon::HttpRequestPtr& request,
-        std::function<void(
-            const drogon::HttpResponsePtr&
-        )>&& callback,
-        const std::string& runIdText
-    ) {
-        // 统一返回 JSON 错误
-        auto sendError = [&callback](
-            auto status,
-            const std::string& message
+    // POST /api/training-runs/{run_id}/status
+    // 更新训练实验状态
+    drogon::app().registerHandler(
+        "/api/training-runs/{run_id}/status",
+        [dbClient](
+            const drogon::HttpRequestPtr& request,
+            std::function<void(
+                const drogon::HttpResponsePtr&
+            )>&& callback,
+            const std::string& runIdText
         ) {
-            Json::Value body;
-            body["status"] = "error";
-            body["message"] = message;
+            auto reply = std::move(callback);
 
-            auto response =
-                drogon::HttpResponse::newHttpJsonResponse(body);
+            // 1. 校验训练实验 ID
+            int64_t runId = 0;
 
-            response->setStatusCode(status);
-            callback(response);
-        };
-
-        // 1. 校验实验 ID
-        int64_t runId = 0;
-
-        if (!parsePositiveInt64(runIdText, runId)) {
-            sendError(
-                drogon::k400BadRequest,
-                "Invalid training run ID"
-            );
-            return;
-        }
-
-        // 2. 读取 JSON 请求体
-        const auto json = request->getJsonObject();
-
-        if (!json || !json->isObject()) {
-            sendError(
-                drogon::k400BadRequest,
-                "A JSON object is required"
-            );
-            return;
-        }
-
-        const auto& data = *json;
-
-        // 必需字段必须存在且类型正确
-        if (
-            !data.isMember("global_step") ||
-            !data["global_step"].isInt64() ||
-            !data.isMember("epoch") ||
-            !data["epoch"].isInt() ||
-            !data.isMember("train_loss") ||
-            !data["train_loss"].isNumeric() ||
-            !data.isMember("learning_rate") ||
-            !data["learning_rate"].isNumeric()
-        ) {
-            sendError(
-                drogon::k400BadRequest,
-                "Missing or invalid required fields"
-            );
-            return;
-        }
-
-        const int64_t globalStep =
-            data["global_step"].asInt64();
-
-        const int epoch = data["epoch"].asInt();
-
-        const double trainLoss =
-            data["train_loss"].asDouble();
-
-        const double learningRate =
-            data["learning_rate"].asDouble();
-
-        if (
-            globalStep <= 0 ||
-            epoch <= 0 ||
-            !std::isfinite(trainLoss) ||
-            trainLoss < 0 ||
-            !std::isfinite(learningRate) ||
-            learningRate <= 0
-        ) {
-            sendError(
-                drogon::k400BadRequest,
-                "Metric values are outside valid ranges"
-            );
-            return;
-        }
-
-        // 3. 可选字段：缺失或 JSON null 均存储为 SQL NULL
-        std::optional<double> valLoss;
-        std::optional<double> tokensPerSecond;
-
-        if (
-            data.isMember("val_loss") &&
-            !data["val_loss"].isNull()
-        ) {
-            if (!data["val_loss"].isNumeric()) {
-                sendError(
-                    drogon::k400BadRequest,
-                    "val_loss must be numeric or null"
-                );
-                return;
-            }
-
-            valLoss = data["val_loss"].asDouble();
-
-            if (
-                !std::isfinite(*valLoss) ||
-                *valLoss < 0
-            ) {
-                sendError(
-                    drogon::k400BadRequest,
-                    "Invalid val_loss"
-                );
-                return;
-            }
-        }
-
-        if (
-            data.isMember("tokens_per_second") &&
-            !data["tokens_per_second"].isNull()
-        ) {
-            if (!data["tokens_per_second"].isNumeric()) {
-                sendError(
-                    drogon::k400BadRequest,
-                    "tokens_per_second must be numeric or null"
-                );
-                return;
-            }
-
-            tokensPerSecond =
-                data["tokens_per_second"].asDouble();
-
-            if (
-                !std::isfinite(*tokensPerSecond) ||
-                *tokensPerSecond < 0
-            ) {
-                sendError(
-                    drogon::k400BadRequest,
-                    "Invalid tokens_per_second"
-                );
-                return;
-            }
-        }
-
-        // 4. 准备异步数据库操作
-        auto reply = std::move(callback);
-
-        auto onSuccess = [
-            reply,
-            runId,
-            globalStep,
-            epoch,
-            trainLoss,
-            valLoss,
-            learningRate,
-            tokensPerSecond
-        ](const drogon::orm::Result& result) {
-                        // ON CONFLICT DO NOTHING 时，
-            // 如果没有插入新记录，RETURNING id 会返回空结果。
-            if (result.size() == 0) {
+            if (!parsePositiveInt64(runIdText, runId)) {
                 Json::Value body;
                 body["status"] = "error";
-                body["message"] =
-                    "Metric already exists for this training step";
+                body["message"] = "Invalid training run ID";
 
                 auto response =
                     drogon::HttpResponse::newHttpJsonResponse(body);
-
-                response->setStatusCode(drogon::k409Conflict);
+                response->setStatusCode(drogon::k400BadRequest);
                 reply(response);
                 return;
             }
-            Json::Value item;
 
-            item["id"] = static_cast<Json::Int64>(
-                result[0]["id"].as<int64_t>()
-            );
-            item["run_id"] =
-                static_cast<Json::Int64>(runId);
-            item["global_step"] =
-                static_cast<Json::Int64>(globalStep);
-            item["epoch"] = epoch;
-            item["train_loss"] = trainLoss;
-            item["val_loss"] = valLoss
-                ? Json::Value(*valLoss)
-                : Json::Value(Json::nullValue);
-            item["learning_rate"] = learningRate;
-            item["tokens_per_second"] = tokensPerSecond
-                ? Json::Value(*tokensPerSecond)
-                : Json::Value(Json::nullValue);
+            // 2. 读取并校验 JSON
+            const auto json = request->getJsonObject();
 
-            Json::Value body;
-            body["status"] = "ok";
-            body["item"] = item;
+            if (!json || !json->isObject()) {
+                Json::Value body;
+                body["status"] = "error";
+                body["message"] = "A JSON object is required";
 
-            auto response =
-                drogon::HttpResponse::newHttpJsonResponse(body);
+                auto response =
+                    drogon::HttpResponse::newHttpJsonResponse(body);
+                response->setStatusCode(drogon::k400BadRequest);
+                reply(response);
+                return;
+            }
 
-            response->setStatusCode(drogon::k201Created);
-            reply(response);
-        };
+            const auto& data = *json;
 
+            if (
+                !data.isMember("status") ||
+                !data["status"].isString()
+            ) {
+                Json::Value body;
+                body["status"] = "error";
+                body["message"] = "status must be a string";
 
-        auto onError = [dbClient, reply, runId](
-            const drogon::orm::DrogonDbException&
-        ) {
-            LOG_ERROR << "Failed to insert training metric";
+                auto response =
+                    drogon::HttpResponse::newHttpJsonResponse(body);
+                response->setStatusCode(drogon::k400BadRequest);
+                reply(response);
+                return;
+            }
 
-            // 插入失败后，检查对应的训练实验是否存在。
+            const std::string newStatus =
+                data["status"].asString();
+
+            // 3. 只允许有效的状态流转
+            const bool starting = newStatus == "running";
+
+            const bool finishing =
+                newStatus == "completed" ||
+                newStatus == "failed" ||
+                newStatus == "cancelled";
+
+            if (!starting && !finishing) {
+                Json::Value body;
+                body["status"] = "error";
+                body["message"] = "Unsupported training status";
+
+                auto response =
+                    drogon::HttpResponse::newHttpJsonResponse(body);
+                response->setStatusCode(drogon::k400BadRequest);
+                reply(response);
+                return;
+            }
+
+            // 4. 只允许 created -> running
+            //    或 running -> 终态
             dbClient->execSqlAsync(
-                "SELECT EXISTS ("
-                "SELECT 1 FROM training_runs WHERE id = $1"
-                ") AS run_exists",
+                "UPDATE training_runs "
+                "SET status = $2, "
+                "started_at = CASE "
+                "WHEN $2 = 'running' "
+                "THEN COALESCE(started_at, NOW()) "
+                "ELSE started_at END, "
+                "finished_at = CASE "
+                "WHEN $2 IN ('completed', 'failed', 'cancelled') "
+                "THEN NOW() ELSE finished_at END "
+                "WHERE id = $1 AND ("
+                "(status = 'created' AND $2 = 'running') "
+                "OR (status = 'running' "
+                "AND $2 IN ('completed', 'failed', 'cancelled'))"
+                ") "
+                "RETURNING id, status, "
+                "COALESCE(started_at::text, '') AS started_at, "
+                "COALESCE(finished_at::text, '') AS finished_at",
 
-                [reply](
+                [dbClient, reply, runId](
                     const drogon::orm::Result& result
                 ) {
-                    const bool runExists =
-                        result[0]["run_exists"].as<bool>();
+                    // 5. 没有更新记录：检查是否不存在或状态不合法
+                    if (result.empty()) {
+                        dbClient->execSqlAsync(
+                            "SELECT status FROM training_runs "
+                            "WHERE id = $1",
+
+                            [reply](
+                                const drogon::orm::Result& existing
+                            ) {
+                                Json::Value body;
+                                body["status"] = "error";
+
+                                auto response =
+                                    drogon::HttpResponse::
+                                    newHttpJsonResponse(body);
+
+                                if (existing.empty()) {
+                                    body["message"] =
+                                        "Training run not found";
+                                    response =
+                                        drogon::HttpResponse::
+                                        newHttpJsonResponse(body);
+                                    response->setStatusCode(
+                                        drogon::k404NotFound
+                                    );
+                                } else {
+                                    body["message"] =
+                                        "Invalid status transition";
+                                    body["current_status"] =
+                                        existing[0]["status"].
+                                        as<std::string>();
+                                    response =
+                                        drogon::HttpResponse::
+                                        newHttpJsonResponse(body);
+                                    response->setStatusCode(
+                                        drogon::k409Conflict
+                                    );
+                                }
+
+                                reply(response);
+                            },
+
+                            [reply](
+                                const drogon::orm::DrogonDbException&
+                            ) {
+                                Json::Value body;
+                                body["status"] = "error";
+                                body["message"] =
+                                    "Unable to verify training run";
+
+                                auto response =
+                                    drogon::HttpResponse::
+                                    newHttpJsonResponse(body);
+                                response->setStatusCode(
+                                    drogon::k503ServiceUnavailable
+                                );
+                                reply(response);
+                            },
+
+                            runId
+                        );
+
+                        return;
+                    }
+
+                    // 6. 返回更新后的实验信息
+                    const auto& row = result[0];
 
                     Json::Value body;
-                    body["status"] = "error";
-
-                    if (runExists) {
-                        body["message"] =
-                            "Unable to save training metric";
-                    } else {
-                        body["message"] =
-                            "Training run not found";
-                    }
-
-                    auto response =
-                        drogon::HttpResponse::newHttpJsonResponse(body);
-
-                    if (runExists) {
-                        response->setStatusCode(
-                            drogon::k500InternalServerError
+                    body["status"] = "ok";
+                    body["item"]["id"] =
+                        static_cast<Json::Int64>(
+                            row["id"].as<int64_t>()
                         );
-                    } else {
-                        response->setStatusCode(
-                            drogon::k404NotFound
-                        );
-                    }
+                    body["item"]["status"] =
+                        row["status"].as<std::string>();
+                    body["item"]["started_at"] =
+                        row["started_at"].as<std::string>();
+                    body["item"]["finished_at"] =
+                        row["finished_at"].as<std::string>();
 
-                    reply(response);
+                    reply(
+                        drogon::HttpResponse::newHttpJsonResponse(body)
+                    );
                 },
 
                 [reply](
                     const drogon::orm::DrogonDbException&
                 ) {
-                    LOG_ERROR
-                        << "Failed to check training run after metric insert error";
+                    LOG_ERROR << "Failed to update training run status";
 
                     Json::Value body;
                     body["status"] = "error";
                     body["message"] =
-                        "Unable to save training metric";
+                        "Unable to update training run status";
+
+                    auto response =
+                        drogon::HttpResponse::newHttpJsonResponse(body);
+                    response->setStatusCode(
+                        drogon::k503ServiceUnavailable
+                    );
+                    reply(response);
+                },
+
+                runId,
+                newStatus
+            );
+        },
+        {drogon::Post}
+    );
+
+
+    // POST /api/training-runs/{run_id}/metrics
+    // 写入一次训练指标
+    drogon::app().registerHandler(
+        "/api/training-runs/{run_id}/metrics",
+        [dbClient](
+            const drogon::HttpRequestPtr& request,
+            std::function<void(
+                const drogon::HttpResponsePtr&
+            )>&& callback,
+            const std::string& runIdText
+        ) {
+            // 统一返回 JSON 错误
+            auto sendError = [&callback](
+                auto status,
+                const std::string& message
+            ) {
+                Json::Value body;
+                body["status"] = "error";
+                body["message"] = message;
+
+                auto response =
+                    drogon::HttpResponse::newHttpJsonResponse(body);
+
+                response->setStatusCode(status);
+                callback(response);
+            };
+
+            // 1. 校验实验 ID
+            int64_t runId = 0;
+
+            if (!parsePositiveInt64(runIdText, runId)) {
+                sendError(
+                    drogon::k400BadRequest,
+                    "Invalid training run ID"
+                );
+                return;
+            }
+
+            // 2. 读取 JSON 请求体
+            const auto json = request->getJsonObject();
+
+            if (!json || !json->isObject()) {
+                sendError(
+                    drogon::k400BadRequest,
+                    "A JSON object is required"
+                );
+                return;
+            }
+
+            const auto& data = *json;
+
+            // 必需字段必须存在且类型正确
+            if (
+                !data.isMember("global_step") ||
+                !data["global_step"].isInt64() ||
+                !data.isMember("epoch") ||
+                !data["epoch"].isInt() ||
+                !data.isMember("train_loss") ||
+                !data["train_loss"].isNumeric() ||
+                !data.isMember("learning_rate") ||
+                !data["learning_rate"].isNumeric()
+            ) {
+                sendError(
+                    drogon::k400BadRequest,
+                    "Missing or invalid required fields"
+                );
+                return;
+            }
+
+            const int64_t globalStep =
+                data["global_step"].asInt64();
+
+            const int epoch = data["epoch"].asInt();
+
+            const double trainLoss =
+                data["train_loss"].asDouble();
+
+            const double learningRate =
+                data["learning_rate"].asDouble();
+
+            if (
+                globalStep <= 0 ||
+                epoch <= 0 ||
+                !std::isfinite(trainLoss) ||
+                trainLoss < 0 ||
+                !std::isfinite(learningRate) ||
+                learningRate <= 0
+            ) {
+                sendError(
+                    drogon::k400BadRequest,
+                    "Metric values are outside valid ranges"
+                );
+                return;
+            }
+
+            // 3. 可选字段：缺失或 JSON null 均存储为 SQL NULL
+            std::optional<double> valLoss;
+            std::optional<double> tokensPerSecond;
+
+            if (
+                data.isMember("val_loss") &&
+                !data["val_loss"].isNull()
+            ) {
+                if (!data["val_loss"].isNumeric()) {
+                    sendError(
+                        drogon::k400BadRequest,
+                        "val_loss must be numeric or null"
+                    );
+                    return;
+                }
+
+                valLoss = data["val_loss"].asDouble();
+
+                if (
+                    !std::isfinite(*valLoss) ||
+                    *valLoss < 0
+                ) {
+                    sendError(
+                        drogon::k400BadRequest,
+                        "Invalid val_loss"
+                    );
+                    return;
+                }
+            }
+
+            if (
+                data.isMember("tokens_per_second") &&
+                !data["tokens_per_second"].isNull()
+            ) {
+                if (!data["tokens_per_second"].isNumeric()) {
+                    sendError(
+                        drogon::k400BadRequest,
+                        "tokens_per_second must be numeric or null"
+                    );
+                    return;
+                }
+
+                tokensPerSecond =
+                    data["tokens_per_second"].asDouble();
+
+                if (
+                    !std::isfinite(*tokensPerSecond) ||
+                    *tokensPerSecond < 0
+                ) {
+                    sendError(
+                        drogon::k400BadRequest,
+                        "Invalid tokens_per_second"
+                    );
+                    return;
+                }
+            }
+
+            // 4. 准备异步数据库操作
+            auto reply = std::move(callback);
+
+            auto onSuccess = [
+                reply,
+                runId,
+                globalStep,
+                epoch,
+                trainLoss,
+                valLoss,
+                learningRate,
+                tokensPerSecond
+            ](const drogon::orm::Result& result) {
+                            // ON CONFLICT DO NOTHING 时，
+                // 如果没有插入新记录，RETURNING id 会返回空结果。
+                if (result.size() == 0) {
+                    Json::Value body;
+                    body["status"] = "error";
+                    body["message"] =
+                        "Metric already exists for this training step";
 
                     auto response =
                         drogon::HttpResponse::newHttpJsonResponse(body);
 
-                    response->setStatusCode(
-                        drogon::k500InternalServerError
-                    );
-
+                    response->setStatusCode(drogon::k409Conflict);
                     reply(response);
-                },
+                    return;
+                }
+                Json::Value item;
 
-                runId
-            );
-        };
+                item["id"] = static_cast<Json::Int64>(
+                    result[0]["id"].as<int64_t>()
+                );
+                item["run_id"] =
+                    static_cast<Json::Int64>(runId);
+                item["global_step"] =
+                    static_cast<Json::Int64>(globalStep);
+                item["epoch"] = epoch;
+                item["train_loss"] = trainLoss;
+                item["val_loss"] = valLoss
+                    ? Json::Value(*valLoss)
+                    : Json::Value(Json::nullValue);
+                item["learning_rate"] = learningRate;
+                item["tokens_per_second"] = tokensPerSecond
+                    ? Json::Value(*tokensPerSecond)
+                    : Json::Value(Json::nullValue);
+
+                Json::Value body;
+                body["status"] = "ok";
+                body["item"] = item;
+
+                auto response =
+                    drogon::HttpResponse::newHttpJsonResponse(body);
+
+                response->setStatusCode(drogon::k201Created);
+                reply(response);
+            };
 
 
-        // 5. 按可选字段情况选择固定 SQL。
-        // SQL 使用绑定参数，不拼接用户提供的数值。
-        if (valLoss && tokensPerSecond) {
-            dbClient->execSqlAsync(
-                "INSERT INTO training_metrics "
-                "(run_id, global_step, epoch, train_loss, "
-                "val_loss, learning_rate, tokens_per_second) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7) "
-                "ON CONFLICT (run_id, global_step) DO NOTHING "
-                "RETURNING id",
-                onSuccess,
-                onError,
-                runId,
-                globalStep,
-                epoch,
-                trainLoss,
-                *valLoss,
-                learningRate,
-                *tokensPerSecond
-            );
-        } else if (valLoss && !tokensPerSecond) {
-            dbClient->execSqlAsync(
-                "INSERT INTO training_metrics "
-                "(run_id, global_step, epoch, train_loss, "
-                "val_loss, learning_rate, tokens_per_second) "
-                "VALUES ($1, $2, $3, $4, $5, $6, NULL) "
-                "ON CONFLICT (run_id, global_step) DO NOTHING "
-                "RETURNING id",
-                onSuccess,
-                onError,
-                runId,
-                globalStep,
-                epoch,
-                trainLoss,
-                *valLoss,
-                learningRate
-            );
-        } else if (!valLoss && tokensPerSecond) {
-            dbClient->execSqlAsync(
-                "INSERT INTO training_metrics "
-                "(run_id, global_step, epoch, train_loss, "
-                "val_loss, learning_rate, tokens_per_second) "
-                "VALUES ($1, $2, $3, $4, NULL, $5, $6) "
-                "ON CONFLICT (run_id, global_step) DO NOTHING "
-                "RETURNING id",
-                onSuccess,
-                onError,
-                runId,
-                globalStep,
-                epoch,
-                trainLoss,
-                learningRate,
-                *tokensPerSecond
-            );
-        } else {
-            dbClient->execSqlAsync(
-                "INSERT INTO training_metrics "
-                "(run_id, global_step, epoch, train_loss, "
-                "val_loss, learning_rate, tokens_per_second) "
-                "VALUES ($1, $2, $3, $4, NULL, $5, NULL) "
-                "ON CONFLICT (run_id, global_step) DO NOTHING "
-                "RETURNING id",
-                onSuccess,
-                onError,
-                runId,
-                globalStep,
-                epoch,
-                trainLoss,
-                learningRate
-            );
-        }
-    },
-    {drogon::Post}
-);
+            auto onError = [dbClient, reply, runId](
+                const drogon::orm::DrogonDbException&
+            ) {
+                LOG_ERROR << "Failed to insert training metric";
+
+                // 插入失败后，检查对应的训练实验是否存在。
+                dbClient->execSqlAsync(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM training_runs WHERE id = $1"
+                    ") AS run_exists",
+
+                    [reply](
+                        const drogon::orm::Result& result
+                    ) {
+                        const bool runExists =
+                            result[0]["run_exists"].as<bool>();
+
+                        Json::Value body;
+                        body["status"] = "error";
+
+                        if (runExists) {
+                            body["message"] =
+                                "Unable to save training metric";
+                        } else {
+                            body["message"] =
+                                "Training run not found";
+                        }
+
+                        auto response =
+                            drogon::HttpResponse::newHttpJsonResponse(body);
+
+                        if (runExists) {
+                            response->setStatusCode(
+                                drogon::k500InternalServerError
+                            );
+                        } else {
+                            response->setStatusCode(
+                                drogon::k404NotFound
+                            );
+                        }
+
+                        reply(response);
+                    },
+
+                    [reply](
+                        const drogon::orm::DrogonDbException&
+                    ) {
+                        LOG_ERROR
+                            << "Failed to check training run after metric insert error";
+
+                        Json::Value body;
+                        body["status"] = "error";
+                        body["message"] =
+                            "Unable to save training metric";
+
+                        auto response =
+                            drogon::HttpResponse::newHttpJsonResponse(body);
+
+                        response->setStatusCode(
+                            drogon::k500InternalServerError
+                        );
+
+                        reply(response);
+                    },
+
+                    runId
+                );
+            };
+
+
+            // 5. 按可选字段情况选择固定 SQL。
+            // SQL 使用绑定参数，不拼接用户提供的数值。
+            if (valLoss && tokensPerSecond) {
+                dbClient->execSqlAsync(
+                    "INSERT INTO training_metrics "
+                    "(run_id, global_step, epoch, train_loss, "
+                    "val_loss, learning_rate, tokens_per_second) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7) "
+                    "ON CONFLICT (run_id, global_step) DO NOTHING "
+                    "RETURNING id",
+                    onSuccess,
+                    onError,
+                    runId,
+                    globalStep,
+                    epoch,
+                    trainLoss,
+                    *valLoss,
+                    learningRate,
+                    *tokensPerSecond
+                );
+            } else if (valLoss && !tokensPerSecond) {
+                dbClient->execSqlAsync(
+                    "INSERT INTO training_metrics "
+                    "(run_id, global_step, epoch, train_loss, "
+                    "val_loss, learning_rate, tokens_per_second) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, NULL) "
+                    "ON CONFLICT (run_id, global_step) DO NOTHING "
+                    "RETURNING id",
+                    onSuccess,
+                    onError,
+                    runId,
+                    globalStep,
+                    epoch,
+                    trainLoss,
+                    *valLoss,
+                    learningRate
+                );
+            } else if (!valLoss && tokensPerSecond) {
+                dbClient->execSqlAsync(
+                    "INSERT INTO training_metrics "
+                    "(run_id, global_step, epoch, train_loss, "
+                    "val_loss, learning_rate, tokens_per_second) "
+                    "VALUES ($1, $2, $3, $4, NULL, $5, $6) "
+                    "ON CONFLICT (run_id, global_step) DO NOTHING "
+                    "RETURNING id",
+                    onSuccess,
+                    onError,
+                    runId,
+                    globalStep,
+                    epoch,
+                    trainLoss,
+                    learningRate,
+                    *tokensPerSecond
+                );
+            } else {
+                dbClient->execSqlAsync(
+                    "INSERT INTO training_metrics "
+                    "(run_id, global_step, epoch, train_loss, "
+                    "val_loss, learning_rate, tokens_per_second) "
+                    "VALUES ($1, $2, $3, $4, NULL, $5, NULL) "
+                    "ON CONFLICT (run_id, global_step) DO NOTHING "
+                    "RETURNING id",
+                    onSuccess,
+                    onError,
+                    runId,
+                    globalStep,
+                    epoch,
+                    trainLoss,
+                    learningRate
+                );
+            }
+        },
+        {drogon::Post}
+    );
 
 
     // GET /api/training-runs/{run_id}/metrics
