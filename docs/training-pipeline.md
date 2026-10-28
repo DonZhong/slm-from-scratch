@@ -193,33 +193,21 @@ python scripts/train.py \
   --max-steps 10
 ```
 
-最新已完成验证：
-
-- 12 automated tests passed
-- CUDA training succeeded
-- Train Loss calculated
-- Validation Loss calculated
-- Checkpoint roundtrip succeeded
+历史验证覆盖 CUDA 训练、Train/Validation Loss 及 Checkpoint roundtrip。当前提交应重新执行所需检查并记录实际结果，不沿用历史测试数量。
 
 ## 10. Future Development
 
-下一阶段规划：
+已有 C++ Drogon 监控后端、PostgreSQL 实验数据库、React 监控页面、Docker Compose 编排及训练指标上报实现。
 
-- C++ Drogon monitoring backend
-- PostgreSQL experiment database
-- React + TypeScript dashboard
-- Docker Compose deployment
-- Real-time training metrics
-- Local TinyGPT inference service
-- Web chat interface for the trained model
+下一阶段先完成训练异常状态处理和端到端监控验收，再实现本地 TinyGPT 推理服务及网页文本生成。双人分工和验收条件见 [开发计划](development-plan.md)。
 
 模型训练和推理继续使用 Python / PyTorch。
 
 C++ 后端负责平台业务、API 和服务通信。
 
-## 10. Training Monitor API
+## 11. Training Monitor API
 
-### 10.1 Architecture
+### 11.1 Architecture
 
 训练过程由 Python + PyTorch 执行，C++ Drogon 后端负责实验管理和指标写入，PostgreSQL 负责持久化实验与训练指标。
 
@@ -237,7 +225,7 @@ PostgreSQL
 React + TypeScript Monitor
 ```
 
-### 10.2 API Endpoints
+### 11.2 API Endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -260,7 +248,7 @@ React + TypeScript Monitor
 - `learning_rate`：当前学习率
 - `tokens_per_second`：每秒处理的目标 Token 数，可为空
 
-### 10.3 Start a Monitored Training Run
+### 11.3 Start a Monitored Training Run
 
 ```bash
 python scripts/train.py \
@@ -276,7 +264,7 @@ python scripts/train.py \
 
 正常完成训练后，脚本将实验状态更新为 `completed`。
 
-### 10.4 Checkpoint Policy
+### 11.4 Checkpoint Policy
 
 Checkpoint 默认不保存。
 
@@ -284,7 +272,7 @@ Checkpoint 默认不保存。
 
 提交代码、更新文档与保存模型 Checkpoint 是三件不同的事。
 
-### 10.5 Validation
+### 11.5 Validation
 
 ```bash
 python -m py_compile scripts/train.py
