@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import math
 import torch
 
 from slm.config import TinyGPTConfig
@@ -48,13 +48,21 @@ def generate(
     prompt: str,
     max_new_tokens: int,
     device: torch.device,
+    temperature: float = 0.8,
+    top_k: int | None = 10,
 ) -> str:
+    if not math.isfinite(temperature) or temperature <= 0:
+        raise ValueError(
+            "temperature must be finite and positive"
+        )
+
+    if top_k is not None and top_k <= 0:
+        raise ValueError("top_k must be positive")
+
     token_ids = tokenizer.encode(prompt)
 
     if not token_ids:
-        raise ValueError(
-            "prompt cannot be empty"
-        )
+        raise ValueError("prompt cannot be empty")
 
     model.eval()
 
@@ -70,22 +78,53 @@ def generate(
                 device=device,
             )
 
-            logits = model(input_ids)
+            logits = model(input_ids)[:, -1, :].squeeze(0)
 
-            next_token_logits = logits[
-                :,
-                -1,
-                :,
-            ]
+            # 1. 调整概率分布的尖锐程度
+            logits = logits / temperature
 
-            next_token_id = torch.argmax(
-                next_token_logits,
-                dim=-1,
+            # 2. 不生成训练中未使用的 <unk> 字符
+            logits[tokenizer.unk_id] = float("-inf")
+
+            # 3. 只保留得分最高的 K 个候选字符
+            if top_k is not None:
+                # 排除 <unk>，避免生成未知字符
+                candidate_indices = torch.arange(
+                    logits.size(-1),
+                    device=logits.device,
+                )
+                candidate_indices = candidate_indices[
+                    candidate_indices != tokenizer.unk_id
+                ]
+
+                # K 不能超过实际可用字符数量
+                k = min(top_k, candidate_indices.numel())
+
+                # 只在合法字符中选取得分最高的 K 个
+                candidate_logits = logits[candidate_indices]
+                selected_positions = torch.topk(
+                    candidate_logits,
+                    k,
+                ).indices
+                selected_indices = candidate_indices[selected_positions]
+
+                # 其他字符全部屏蔽，保证候选集合大小受控
+                filtered_logits = torch.full_like(
+                    logits,
+                    float("-inf"),
+                )
+                filtered_logits[selected_indices] = logits[selected_indices]
+                logits = filtered_logits
+
+            # 4. 将得分转换为概率，再随机采样
+            probabilities = torch.softmax(logits, dim=-1)
+
+            next_token_id = torch.multinomial(
+                probabilities,
+                num_samples=1,
             ).item()
 
-            token_ids.append(
-                next_token_id
-            )
+            token_ids.append(next_token_id)
 
     return tokenizer.decode(token_ids)
 
@@ -93,8 +132,7 @@ def generate(
 def main():
     checkpoint_path = Path(
         "/mnt/d/SLM/checkpoints/"
-        "slm-from-scratch/"
-        "tinygpt-toy-v1.pt"
+        "tinygpt-tinyshakespeare-full-20261027.pt"
     )
 
     device = torch.device(
@@ -121,13 +159,13 @@ def main():
         checkpoint["model_state_dict"]
     )
 
-    prompt = "hel"
+    prompt = "ROMEO:"
 
     generated_text = generate(
         model=model,
         tokenizer=tokenizer,
         prompt=prompt,
-        max_new_tokens=40,
+        max_new_tokens=300,
         device=device,
     )
 
