@@ -195,7 +195,7 @@ python scripts/train.py \
 
 最新已完成验证：
 
-- 12 automated tests passed
+- 28 automated tests passed
 - CUDA training succeeded
 - Train Loss calculated
 - Validation Loss calculated
@@ -295,3 +295,103 @@ git diff --check
 后端修改后，还应重新构建 Docker 镜像并验证 HTTP API。
 
 自动化测试结果以实际执行输出为准。
+
+
+## 11. Text Generation and Sampling
+
+### 11.1 Inference Pipeline
+
+The generation script restores the model configuration and tokenizer from an existing checkpoint, loads the model weights, and generates text autoregressively.
+
+```text
+Existing Checkpoint
+        |
+        v
+Restore Model + Tokenizer
+        |
+        v
+Encode Prompt
+        |
+        v
+Forward Pass
+        |
+        v
+Extract Last-Position Logits
+        |
+        v
+Temperature Scaling
+        |
+        v
+Exclude Unknown Token
+        |
+        v
+Top-k Filtering
+        |
+        v
+Softmax + Multinomial Sampling
+        |
+        v
+Append Next Character
+        |
+        +------ Repeat
+        |
+        v
+Decode Generated Text
+```
+
+### 11.2 Temperature
+
+Temperature adjusts the sharpness of the probability distribution.
+
+For logits \(z_i\) and temperature \(T\):
+
+\[
+p_i = \operatorname{softmax}(z_i/T)
+\]
+
+- Lower temperature makes the distribution more concentrated.
+- Higher temperature makes the distribution flatter.
+- Temperature must be finite and greater than zero.
+
+Temperature changes the sampling distribution; it does not update model weights.
+
+### 11.3 Top-k Sampling
+
+Top-k sampling restricts the next-token candidates to the k highest-scoring eligible characters.
+
+All other candidates are masked before Softmax. The unknown token is excluded from generation.
+
+The implementation selects candidate indices rather than filtering solely by a score threshold, ensuring that ties do not cause more than k candidates to remain eligible.
+
+### 11.4 Current Configuration
+
+| Setting | Current value |
+|---|---|
+| Checkpoint | `tinygpt-tinyshakespeare-full-20261027.pt` |
+| Prompt | `ROMEO:` |
+| Maximum new tokens | 300 |
+| Temperature | 0.8 |
+| Top-k | 10 |
+| Context length | 16 characters |
+
+These are the current example's settings, not universal recommendations.
+
+### 11.5 Limitations
+
+The current model uses character-level tokenization and a short context window. It has completed only three training epochs on the Tiny Shakespeare corpus.
+
+The current generation output is a functional inference demonstration, not evidence of fluent language generation.
+
+The generation script loads the existing checkpoint without retraining or saving a new checkpoint.
+
+### 11.6 Validation
+
+Generation tests cover:
+
+- Prompt preservation and generated length.
+- Strict Top-k candidate filtering.
+- Invalid temperature rejection, including NaN and infinity.
+- Invalid Top-k rejection.
+- Empty prompt rejection.
+
+The latest verified test suite contains 28 passing tests.

@@ -177,6 +177,38 @@ Existing checkpoint files are not overwritten.
 
 Large datasets and checkpoints should remain outside the Git repository, preferably on the D: drive.
 
+
+## Text Generation
+
+The project supports autoregressive text generation from a trained TinyGPT checkpoint.
+
+Run the current generation example:
+
+```bash
+python scripts/generate_check.py
+```
+
+The script currently loads:
+
+`/mnt/d/SLM/checkpoints/tinygpt-tinyshakespeare-full-20261027.pt`
+
+Current generation settings:
+
+- Prompt: `ROMEO:`
+- Maximum new tokens: 300
+- Temperature: 0.8
+- Top-k: 10
+- Sampling: multinomial sampling from the filtered probability distribution
+- Unknown token: excluded from generation
+
+The tokenizer is character-level, so one token corresponds to one character rather than one word or subword.
+
+Generation is stochastic, so different runs may produce different text.
+
+The current model is an experimental learning baseline. Successful inference does not imply fluent or semantically coherent generation.
+
+Text generation loads the existing checkpoint and does not retrain the model or save a new checkpoint.
+
 ## Roadmap
 
 ### Training Platform
