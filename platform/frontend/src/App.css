@@ -3,6 +3,14 @@
   min-height: 100vh;
 }
 
+.mobile-workspaces { display: none; }
+
+@media (max-width: 840px) {
+  .mobile-workspaces { display: flex; gap: 8px; margin-top: 16px; }
+  .mobile-workspaces button { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; padding: 11px; color: #829ca9; border: 1px solid #2a3e48; border-radius: 6px; background: #101f29; cursor: pointer; font-size: 12px; }
+  .mobile-workspaces button[aria-pressed="true"] { color: #76d7be; border-color: #4b7b6b; background: #16332d; }
+}
+
 .app-shell {
   min-height: 100vh;
 }
