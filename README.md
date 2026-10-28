@@ -5,6 +5,14 @@
 
 目标不是调用现成的预训练模型，而是先使用 PyTorch 搭建一个可以训练和生成文本的 TinyGPT，然后逐步深入到底层算子、C++、CUDA 和 Triton。
 
+## 双人协作
+
+团队成员为 **DonZhong** 和 **DunhuaZhong**，两人均可提交代码和合并 PR。采用独立功能分支、交叉评审和共同联调。
+
+- [协作指南](CONTRIBUTING.md)：权限、建议分工、分支与合并流程、检查命令。
+- [双人开发需求与计划](docs/development-plan.md)：当前基线、训练监控闭环与推理功能的任务及验收条件。
+- [平台说明](docs/platform-v1.md)：已有服务、API 与本地启动步骤。
+
 ## Goals
 
 ### 1. TinyGPT
@@ -61,13 +69,17 @@ Implemented:
 - Training CLI with configurable epochs, batch size, learning rate, and maximum steps.
 - Checkpoint saving and model weight restoration.
 - Automated unit and CLI integration tests.
+- C++ Drogon APIs and PostgreSQL persistence for training runs, metrics, and hardware snapshots.
+- Python training-metrics reporting and host hardware collection.
+- React hardware dashboard and training-metrics panel.
 
 Current limitations:
 
 - TinyGPT is a small educational base language model.
 - The current training objective is next-token prediction, not instruction following.
 - Checkpoints have been tested for model restoration, but exact interruption/resumption of training is not yet implemented.
-- Web-based model chat and training monitoring are planned, not yet implemented.
+- Training monitoring has an implementation; complete local integration acceptance is tracked in the development plan.
+- Web-based model chat and a dedicated inference service are planned, not yet implemented.
 
 ## Installation
 
@@ -148,7 +160,7 @@ The tests cover:
 - Training CLI step limits.
 - Checkpoint saving, loading, and model inference.
 
-The latest validated result is 12 passing tests.
+Report the results of the current test run; test counts change as coverage grows.
 
 ## Checkpoints
 
@@ -276,5 +288,6 @@ docker compose logs --tail=50 backend
 docker compose down
 ```
 
-当前已实现后端健康检查。PostgreSQL、React 前端、
-训练监控和 TinyGPT Chat 尚未接入。
+当前已实现 PostgreSQL 实验与指标存储、硬件快照 API、Python 指标上报，以及 React 硬件和训练监控页面。TinyGPT Chat 尚未接入。
+
+首次启动需要配置 `.env` 并按顺序执行数据库迁移；完整步骤见 [平台说明](docs/platform-v1.md)。上面的健康检查命令用于已完成初始化的环境。
