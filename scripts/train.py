@@ -131,6 +131,27 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional name for this training run.",
     )
+
+    parser.add_argument(
+    "--context-length",
+    type=int,
+    default=16,
+    help="Number of context tokens.",
+    )
+
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=1,
+        help="Sliding-window stride for the dataset.",
+    )
+
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.0,
+        help="Dropout probability.",
+    )
     args = parser.parse_args()
 
     if args.epochs <= 0:
@@ -144,6 +165,18 @@ def parse_args() -> argparse.Namespace:
 
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error("--max-steps must be positive")
+
+    if args.context_length <= 0:
+        parser.error("--context-length must be positive")
+
+    if args.stride <= 0:
+        parser.error("--stride must be positive")
+
+    if (
+        not math.isfinite(args.dropout)
+        or not 0.0 <= args.dropout < 1.0
+    ):
+        parser.error("--dropout must be finite and in [0, 1)")
 
     return args
 
@@ -174,33 +207,36 @@ def main() -> None:
         text = args.data_path.read_text(encoding="utf-8")
         print("dataset source:", args.data_path)
 
-    if len(text) <= 16:
+    if len(text) <= args.context_length:
         raise ValueError(
-            "Training text must contain more than 16 characters."
+            "Training text must contain more characters "
+            "than context_length."
         )
 
     train_text, val_text = split_text(
         text,
         train_fraction=0.9,
-        context_length=16,
+        context_length=args.context_length,
     )
 
     tokenizer = CharacterTokenizer.from_text(train_text)
 
     config = TinyGPTConfig(
         vocab_size=tokenizer.vocab_size,
-        context_length=16,
-        dropout=0.0,
+        context_length=args.context_length,
+        dropout=args.dropout,
     )
 
     train_dataset = NextTokenDataset(
         token_ids=tokenizer.encode(train_text),
         context_length=config.context_length,
+        stride=args.stride,
     )
 
     val_dataset = NextTokenDataset(
         token_ids=tokenizer.encode(val_text),
         context_length=config.context_length,
+        stride=args.stride,
     )
 
     loader = DataLoader(
@@ -235,6 +271,12 @@ def main() -> None:
     print("epochs:", args.epochs)
     print("batch size:", args.batch_size)
     print("learning rate:", args.learning_rate)
+
+    print("context length:", config.context_length)
+    print("dataset stride:", args.stride)
+    print("dropout:", config.dropout)
+
+
     print("vocab size:", tokenizer.vocab_size)
     print("train characters:", len(train_text))
     print("val characters:", len(val_text))

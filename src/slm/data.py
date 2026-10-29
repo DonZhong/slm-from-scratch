@@ -3,15 +3,22 @@ import torch
 from torch.utils.data import Dataset
 
 
+
 class NextTokenDataset(Dataset):
     def __init__(
         self,
         token_ids: list[int],
         context_length: int,
+        stride: int = 1,
     ):
         if context_length <= 0:
             raise ValueError(
                 "context_length must be greater than 0"
+            )
+
+        if stride <= 0:
+            raise ValueError(
+                "stride must be greater than 0"
             )
 
         if len(token_ids) <= context_length:
@@ -25,16 +32,21 @@ class NextTokenDataset(Dataset):
         )
 
         self.context_length = context_length
+        self.stride = stride
 
     def __len__(self) -> int:
-        return len(self.tokens) - self.context_length
+        available_starts = (
+            len(self.tokens) - self.context_length - 1
+        )
+
+        return available_starts // self.stride + 1
 
     def __getitem__(
         self,
         index: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        start = index
-        end = index + self.context_length
+        start = index * self.stride
+        end = start + self.context_length
 
         input_ids = self.tokens[start:end]
 
@@ -43,6 +55,7 @@ class NextTokenDataset(Dataset):
         ]
 
         return input_ids, target_ids
+
 
 
 def split_text(
