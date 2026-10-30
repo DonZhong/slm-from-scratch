@@ -45,6 +45,12 @@ def test_diagnostics_observe_actual_step_without_changing_training():
     attention = torch.tensor(diagnostics["attention"]["weights"])
     assert torch.equal(attention.triu(1), torch.zeros_like(attention))
     assert torch.allclose(attention.sum(-1), torch.ones(4), atol=1e-6)
+    assert diagnostics["input_shape"] == [1, 4]
+    assert diagnostics["shapes"]["embeddings"] == [1, 4, 8]
+    assert diagnostics["shapes"]["lm_head"] == [1, 4, tokenizer.vocab_size]
+    assert diagnostics["input_ids"] == inputs[0].tolist()
+    assert set(diagnostics["pipeline"]) == {"embeddings", "transformer", "prediction", "backward", "optimizer"}
+    assert all(value >= 0 for value in diagnostics["pipeline"].values())
     json.dumps(diagnostics, allow_nan=False)
     assert not any(module._forward_hooks or module._forward_pre_hooks for module in model.modules())
 

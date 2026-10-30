@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -40,16 +42,29 @@ def train_step(
     optimizer: Optimizer,
     input_ids: torch.Tensor,
     targets: torch.Tensor,
+    *,
+    timings: dict[str, float] | None = None,
 ) -> torch.Tensor:
     model.train()
 
     optimizer.zero_grad(set_to_none=True)
 
-    logits = model(input_ids)
-    loss = language_model_loss(logits, targets)
+    def measure(name, operation):
+        if timings is None:
+            return operation()
+        if input_ids.is_cuda:
+            torch.cuda.synchronize(input_ids.device)
+        started = time.perf_counter()
+        result = operation()
+        if input_ids.is_cuda:
+            torch.cuda.synchronize(input_ids.device)
+        timings[name] = (time.perf_counter() - started) * 1000
+        return result
 
-    loss.backward()
-    optimizer.step()
+    logits = measure("forward", lambda: model(input_ids))
+    loss = measure("loss", lambda: language_model_loss(logits, targets))
+    measure("backward", loss.backward)
+    measure("optimizer", optimizer.step)
 
     return loss.detach()
 

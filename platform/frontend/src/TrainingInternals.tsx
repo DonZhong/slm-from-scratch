@@ -9,7 +9,7 @@ import {
   Terminal,
   Zap,
 } from "lucide-react";
-import { buildSeries } from "./training-data";
+import { buildSeries, numeric } from "./training-data";
 import type { Diagnostic, TrainingMetric, TrainingRun } from "./training-data";
 import { number, scientific, token } from "./training-format";
 import { Stat, Plot } from "./TrainingCharts";
@@ -71,13 +71,18 @@ export default function Internals({
     diagnostic?.layers.find((item) => item.name === focus) ??
     diagnostic?.layers[0];
   const config = run.config;
+  const stageMs = diagnostic ? [numeric(diagnostic.pipeline.input), numeric(diagnostic.pipeline.embeddings), numeric(diagnostic.pipeline.transformer), numeric(diagnostic.pipeline.prediction),
+    numeric(diagnostic.pipeline.backward) !== null && numeric(diagnostic.pipeline.optimizer) !== null ? Number(diagnostic.pipeline.backward) + Number(diagnostic.pipeline.optimizer) : null] : [];
+  const inputShape = diagnostic?.input_shape.length ? diagnostic.input_shape : [config.batch_size, config.context_length];
+  const hiddenShape = diagnostic?.shapes.embeddings;
+  const outputShape = diagnostic?.shapes.lm_head;
   return (
     <div className="lab-internals">
       <section className="lab-card">
         <div className="lab-card-heading">
           <div>
             <h3>一次训练，模型里发生了什么？</h3>
-            <p>点击阶段查看机制；下方诊断展示实际训练采样。</p>
+            <p>点击阶段查看真实采样耗时、输入与张量形状，并查看下方模型内部记录。</p>
           </div>
           <BrainCircuit size={20} />
         </div>
@@ -95,6 +100,7 @@ export default function Internals({
                 0{i + 1} / {item.code}
               </small>
               <strong>{item.name}</strong>
+              <small>{stageMs[i] === null || stageMs[i] === undefined ? "未采集" : `已执行 · ${number(stageMs[i], 3)} ms`}</small>
               {i < stages.length - 1 && (
                 <ArrowRight className="flow-arrow" size={14} />
               )}
@@ -106,29 +112,16 @@ export default function Internals({
           <div>
             <strong>{stages[stage].name}</strong>
             <p>{stages[stage].description}</p>
+            {diagnostic && <p>采样 Step {snapshot?.global_step} · {stage === 0 ? "输入传输" : stages[stage].name}耗时 {number(stageMs[stage], 3)} ms</p>}
+            {stage === 0 && diagnostic && <p>实际输入 IDs：{diagnostic.input_ids.join(", ")}<br />实际目标 IDs：{diagnostic.target_ids.join(", ")}</p>}
           </div>
         </div>
         <div className="lab-shapes">
-          <span>
-            输入 [B, T]{" "}
-            <b>
-              [{number(config.batch_size, 0)},{" "}
-              {number(config.context_length, 0)}]
-            </b>
-          </span>
-          <ArrowRight size={13} />
-          <span>
-            隐藏状态 [B, T, D] <b>D = {number(config.d_model, 0)}</b>
-          </span>
-          <ArrowRight size={13} />
-          <span>
-            输出 [B, T, V] <b>V = {number(config.vocab_size, 0)}</b>
-          </span>
+          <span>输入 [B, T] <b>[{inputShape.map((n) => number(n, 0)).join(", ")}]</b></span><ArrowRight size={13} />
+          <span>隐藏状态 <b>{hiddenShape ? `[${hiddenShape.join(", ")}]` : `D = ${number(config.d_model, 0)}`}</b></span><ArrowRight size={13} />
+          <span>输出 <b>{outputShape ? `[${outputShape.join(", ")}]` : `V = ${number(config.vocab_size, 0)}`}</b></span>
         </div>
-        <p className="lab-note">
-          B 为配置批大小，最后一批可能更小；T
-          为上下文长度。以上是训练机制说明，不代表浏览器在实时执行这些计算。
-        </p>
+        <p className="lab-note">{diagnostic?.input_shape.length ? `来自真实采样 Step ${snapshot?.global_step}。输入耗时为当前批次设备传输；分词在构建数据集时完成。阶段耗时含必要的 GPU 同步。` : "此实验尚无实际张量采样，以上形状来自实验配置。"}</p>
       </section>
       {!diagnostic ? (
         <section className="lab-empty lab-card">
@@ -142,7 +135,7 @@ export default function Internals({
             http://127.0.0.1:8080 --diagnostics-interval 10
           </code>
           <p>
-            诊断默认关闭，开启后会保存首个样本的短文本片段；请使用适合展示的训练数据。
+            新训练默认每 10 步采样，并记录首步、Epoch 末步和最后一步。采样会保存短文本片段；显式传入 --diagnostics-interval 0 可关闭。
           </p>
         </section>
       ) : (

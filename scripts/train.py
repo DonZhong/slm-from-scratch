@@ -134,10 +134,10 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-    "--context-length",
-    type=int,
-    default=16,
-    help="Number of context tokens.",
+        "--context-length",
+        type=int,
+        default=16,
+        help="Number of context tokens.",
     )
 
     parser.add_argument(
@@ -152,9 +152,10 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Dropout probability.",
+    )
     parser.add_argument(
-        "--diagnostics-interval", type=int, default=0,
-        help="Capture model internals every N steps (0 disables; includes short training text excerpts).",
+        "--diagnostics-interval", type=int, default=10,
+        help="Capture model internals every N steps (default 10; 0 disables; includes short training text excerpts).",
     )
     args = parser.parse_args()
 
@@ -325,6 +326,14 @@ def main() -> None:
                     "parameter_count": sum(p.numel() for p in model.parameters()),
                     "device": str(device),
                     "diagnostics_interval": args.diagnostics_interval,
+                    "stride": args.stride,
+                    "optimizer": "AdamW",
+                    "weight_decay": 0.01,
+                    "train_characters": len(train_text),
+                    "val_characters": len(val_text),
+                    "train_samples": len(train_dataset),
+                    "val_samples": len(val_dataset),
+                    "monitor_version": 1,
                 },
             },
         )
@@ -362,186 +371,219 @@ def main() -> None:
         print("training run status: running")
 
 
-    for epoch in range(1, args.epochs + 1):
-        total_loss = 0.0
-        total_tokens = 0
-        deferred_metric = None
-
-        for batch_index, (input_ids, targets) in enumerate(
-            loader, start=1
-        ):
-            input_ids = input_ids.to(device)
-            targets = targets.to(device)
-
-            token_count = targets.numel()
-
-            # 1. 测量本次训练 step 的耗时
-            step_started = time.perf_counter()
-
-            diagnostics = None
-            capture_diagnostics = args.diagnostics_interval > 0 and (
-                global_step == 0
-                or (global_step + 1) % args.diagnostics_interval == 0
-                or batch_index == len(loader)
-                or global_step + 1 == args.max_steps
-            )
-            if capture_diagnostics:
-                loss, diagnostics = diagnostic_train_step(model, optimizer, input_ids, targets, tokenizer)
-            else:
-                loss = train_step(
-                    model=model,
-                    optimizer=optimizer,
-                    input_ids=input_ids,
-                    targets=targets,
-                )
-
-            # item() 将 loss 转换为 Python 数值，
-            # 同时确保需要读取的 GPU 计算结果已经可用
-            step_loss = float(loss.item())
-
-            step_duration = max(
-                time.perf_counter() - step_started,
-                1e-9,
-            )
-
-            tokens_per_second = (
-                token_count / step_duration
-            )
-
-            # 2. 累积当前 epoch 的平均训练损失
-            total_loss += step_loss * token_count
-            total_tokens += token_count
-            global_step += 1
-
-            # 3. 读取当前优化器学习率
-            current_lr = float(
-                optimizer.param_groups[0]["lr"]
-            )
-
-            # 4. 整理当前 step 的真实训练指标
-            metric = {
-                "global_step": global_step,
-                "epoch": epoch,
-                "train_loss": step_loss,
-                "learning_rate": current_lr,
-                "tokens_per_second": tokens_per_second,
-                "val_loss": None,
-            }
-            if diagnostics is not None:
-                metric["diagnostics"] = diagnostics
-
-
-            is_last_batch = batch_index == len(loader)
-
-            hit_step_limit = (
-                args.max_steps is not None
-                and global_step >= args.max_steps
-            )
-
-            # 5. 将指标写入后端
+    try:
+        def report_runtime(phase, step, epoch, **details):
             if args.api_base_url and run_id is not None:
-                if is_last_batch or hit_step_limit:
-                    # 暂存最后一步，等验证损失算出后一起写入
-                    deferred_metric = metric
+                post_api_json(args.api_base_url, f"/api/training-runs/{run_id}/runtime", {
+                    "phase": phase, "global_step": step, "epoch": epoch, **details,
+                })
+
+        for epoch in range(1, args.epochs + 1):
+            total_loss = 0.0
+            total_tokens = 0
+            deferred_metric = None
+
+            for batch_index, (input_ids, targets) in enumerate(
+                loader, start=1
+            ):
+                input_started = time.perf_counter()
+                input_ids = input_ids.to(device)
+                targets = targets.to(device)
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                input_seconds = time.perf_counter() - input_started
+
+                token_count = targets.numel()
+
+                # 1. 测量本次训练 step 的耗时
+
+                diagnostics = None
+                capture_diagnostics = args.diagnostics_interval > 0 and (
+                    global_step == 0
+                    or (global_step + 1) % args.diagnostics_interval == 0
+                    or batch_index == len(loader)
+                    or global_step + 1 == args.max_steps
+                )
+                if capture_diagnostics or global_step % 10 == 0:
+                    report_runtime("training", global_step + 1, epoch)
+                step_started = time.perf_counter()
+                if capture_diagnostics:
+                    loss, diagnostics = diagnostic_train_step(model, optimizer, input_ids, targets, tokenizer)
+                    diagnostics["pipeline"]["input"] = input_seconds * 1000
                 else:
-                    post_api_json(
-                        args.api_base_url,
-                        f"/api/training-runs/{run_id}/metrics",
-                        metric,
+                    loss = train_step(
+                        model=model,
+                        optimizer=optimizer,
+                        input_ids=input_ids,
+                        targets=targets,
                     )
 
-            # 6. 达到最大 step 数后结束本轮训练
-            if hit_step_limit:
-                break
+                # item() 将 loss 转换为 Python 数值，
+                # 同时确保需要读取的 GPU 计算结果已经可用
+                step_loss = float(loss.item())
+
+                step_duration = max(
+                    time.perf_counter() - step_started,
+                    1e-9,
+                )
+
+                tokens_per_second = (
+                    token_count / step_duration
+                )
+
+                # 2. 累积当前 epoch 的平均训练损失
+                total_loss += step_loss * token_count
+                total_tokens += token_count
+                global_step += 1
+
+                # 3. 读取当前优化器学习率
+                current_lr = float(
+                    optimizer.param_groups[0]["lr"]
+                )
+
+                # 4. 整理当前 step 的真实训练指标
+                metric = {
+                    "global_step": global_step,
+                    "epoch": epoch,
+                    "train_loss": step_loss,
+                    "learning_rate": current_lr,
+                    "tokens_per_second": tokens_per_second,
+                    "val_loss": None,
+                }
+                if diagnostics is not None:
+                    metric["diagnostics"] = diagnostics
+
+
+                is_last_batch = batch_index == len(loader)
+
+                hit_step_limit = (
+                    args.max_steps is not None
+                    and global_step >= args.max_steps
+                )
+
+                # 5. 将指标写入后端
+                if args.api_base_url and run_id is not None:
+                    if is_last_batch or hit_step_limit:
+                        # 暂存最后一步，等验证损失算出后一起写入
+                        deferred_metric = metric
+                    else:
+                        post_api_json(
+                            args.api_base_url,
+                            f"/api/training-runs/{run_id}/metrics",
+                            metric,
+                        )
+
+                # 6. 达到最大 step 数后结束本轮训练
+                if hit_step_limit:
+                    break
 
 
 
-        average_loss = total_loss / total_tokens
+            average_loss = total_loss / total_tokens
 
-        val_loss = evaluate(
-            model=model,
-            loader=val_loader,
-            device=device,
-        )
-
-        # 最后一步连同当前 epoch 的验证损失一起写入
-        if (
-            args.api_base_url
-            and run_id is not None
-            and deferred_metric is not None
-        ):
-            deferred_metric["val_loss"] = val_loss
-
-            post_api_json(
-                args.api_base_url,
-                f"/api/training-runs/{run_id}/metrics",
-                deferred_metric,
+            report_runtime("validation", global_step, epoch)
+            val_loss = evaluate(
+                model=model,
+                loader=val_loader,
+                device=device,
             )
 
-        if first_epoch_loss is None:
-            first_epoch_loss = average_loss
+            # 最后一步连同当前 epoch 的验证损失一起写入
+            if (
+                args.api_base_url
+                and run_id is not None
+                and deferred_metric is not None
+            ):
+                deferred_metric["val_loss"] = val_loss
 
-        final_epoch_loss = average_loss
+                post_api_json(
+                    args.api_base_url,
+                    f"/api/training-runs/{run_id}/metrics",
+                    deferred_metric,
+                )
 
-        print(
-            f"epoch={epoch:02d} "
-            f"step={global_step:04d} "
-            f"train_loss={average_loss:.6f} "
-            f"val_loss={val_loss:.6f}"
-        )
-        if args.max_steps is not None and global_step >= args.max_steps:
-            break
+            if first_epoch_loss is None:
+                first_epoch_loss = average_loss
 
-    print("training completed")
-    print("total steps:", global_step)
+            final_epoch_loss = average_loss
 
-    if args.max_steps is not None:
-        print("loss trend: not evaluated in step-limited run")
-    elif args.epochs > 1:
-        print(
-            "loss decreased:",
-            final_epoch_loss < first_epoch_loss,
-        )
+            print(
+                f"epoch={epoch:02d} "
+                f"step={global_step:04d} "
+                f"train_loss={average_loss:.6f} "
+                f"val_loss={val_loss:.6f}"
+            )
+            if args.max_steps is not None and global_step >= args.max_steps:
+                break
 
-    if args.checkpoint_path is None:
-        print("checkpoint: not saved")
-    else:
-        checkpoint_path = args.checkpoint_path
-        checkpoint_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        print("training completed")
+        print("total steps:", global_step)
 
-        checkpoint = {
-            "format_version": 1,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "config": asdict(config),
-            "token_to_id": tokenizer.token_to_id,
-            "epoch": epoch,
-            "global_step": global_step,
-            "loss": final_epoch_loss,
-            "val_loss": val_loss,
-        }
+        if args.max_steps is not None:
+            print("loss trend: not evaluated in step-limited run")
+        elif args.epochs > 1:
+            print(
+                "loss decreased:",
+                final_epoch_loss < first_epoch_loss,
+            )
 
-        torch.save(
-            checkpoint,
-            checkpoint_path,
-        )
+        if args.checkpoint_path is None:
+            print("checkpoint: not saved")
+        else:
+            report_runtime("checkpoint", global_step, epoch)
+            checkpoint_path = args.checkpoint_path
+            checkpoint_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
-        print("checkpoint path:", checkpoint_path)
-        print("checkpoint exists:", checkpoint_path.exists())
-        print("checkpoint bytes:", checkpoint_path.stat().st_size)
+            checkpoint = {
+                "format_version": 1,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "config": asdict(config),
+                "token_to_id": tokenizer.token_to_id,
+                "epoch": epoch,
+                "global_step": global_step,
+                "loss": final_epoch_loss,
+                "val_loss": val_loss,
+            }
 
-    # 训练和 checkpoint 保存均成功后，标记实验完成
-    if args.api_base_url and run_id is not None:
-        post_api_json(
-            args.api_base_url,
-            f"/api/training-runs/{run_id}/status",
-            {"status": "completed"},
-        )
+            torch.save(
+                checkpoint,
+                checkpoint_path,
+            )
 
-        print("training run status: completed")
+            print("checkpoint path:", checkpoint_path)
+            print("checkpoint exists:", checkpoint_path.exists())
+            print("checkpoint bytes:", checkpoint_path.stat().st_size)
+
+        report_runtime("completed", global_step, epoch,
+                       checkpoint_path=str(args.checkpoint_path) if args.checkpoint_path else None,
+                       checkpoint_size_bytes=args.checkpoint_path.stat().st_size if args.checkpoint_path else None)
+
+        # 训练和 checkpoint 保存均成功后，标记实验完成
+        if args.api_base_url and run_id is not None:
+            post_api_json(
+                args.api_base_url,
+                f"/api/training-runs/{run_id}/status",
+                {"status": "completed"},
+            )
+
+            print("training run status: completed")
+    except (Exception, KeyboardInterrupt) as exc:
+        if args.api_base_url and run_id is not None:
+            try:
+                post_api_json(args.api_base_url, f"/api/training-runs/{run_id}/runtime", {
+                    "phase": "failed", "global_step": global_step,
+                    "epoch": locals().get("epoch", 0), "message": str(exc)[:1000],
+                })
+                post_api_json(args.api_base_url, f"/api/training-runs/{run_id}/status", {
+                    "status": "cancelled" if isinstance(exc, KeyboardInterrupt) else "failed",
+                })
+            except Exception as report_error:
+                print(f"Unable to report training failure: {report_error}")
+        raise
 
 
 if __name__ == "__main__":

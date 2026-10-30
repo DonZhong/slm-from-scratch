@@ -20,6 +20,11 @@ export type LayerDiagnostic = {
   parameter_count: number | null;
 };
 export type Diagnostic = {
+  pipeline: Config;
+  input_shape: number[];
+  shapes: Record<string, number[]>;
+  input_ids: number[];
+  target_ids: number[];
   layers: LayerDiagnostic[];
   gradient_norm: number | null;
   parameter_norm: number | null;
@@ -82,6 +87,12 @@ export function parseDiagnostic(value: unknown): Diagnostic | null {
     weights.length === tokens.length &&
     weights.every((row) => row.length === tokens.length);
   return {
+    pipeline: Object.fromEntries(Object.entries(record(d.pipeline)).map(([key, value]) => [key, nonnegative(value)])),
+    input_shape: Array.isArray(d.input_shape) ? d.input_shape.filter((n) => Number.isSafeInteger(n) && n > 0).slice(0, 3) : [],
+    shapes: Object.fromEntries(Object.entries(record(d.shapes)).flatMap(([key, shape]) =>
+      Array.isArray(shape) && shape.length <= 3 && shape.every((n) => Number.isSafeInteger(n) && n > 0) ? [[key, shape as number[]]] : [])),
+    input_ids: Array.isArray(d.input_ids) ? d.input_ids.slice(0, 16).filter((n) => Number.isSafeInteger(n) && n >= 0) : [],
+    target_ids: Array.isArray(d.target_ids) ? d.target_ids.slice(0, 16).filter((n) => Number.isSafeInteger(n) && n >= 0) : [],
     layers: Array.isArray(d.layers)
       ? d.layers.slice(0, 32).map((value) => {
           const layer = record(value);
@@ -241,4 +252,42 @@ export function metricsCsv(metrics: TrainingMetric[]): string {
     keys.join(","),
     ...metrics.map((m) => keys.map((key) => m[key] ?? "").join(",")),
   ].join("\n");
+}
+
+export type TrainingMonitor = {
+  run_status: string;
+  config: Config;
+  runtime: Config;
+  updated_at: string;
+  summary: {
+    total_metrics: number | null;
+    latest_step: number | null;
+    diagnostics_count: number | null;
+    first_loss: number | null;
+    last_loss: number | null;
+    best_loss: number | null;
+    last_val_loss: number | null;
+    average_speed: number | null;
+    loss_change_percent: number | null;
+  };
+};
+export function parseMonitor(payload: unknown, runId: number): TrainingMonitor {
+  const data = record(payload);
+  if (data.status !== "ok" || data.run_id !== runId) throw new Error("运行监控格式或实验编号异常");
+  const summary = record(data.summary);
+  return {
+    run_status: text(data.run_status), config: record(data.config), runtime: record(data.runtime), updated_at: text(data.updated_at),
+    summary: {
+      total_metrics: nonnegative(summary.total_metrics), latest_step: nonnegative(summary.latest_step),
+      diagnostics_count: nonnegative(summary.diagnostics_count), first_loss: nonnegative(summary.first_loss),
+      last_loss: nonnegative(summary.last_loss), best_loss: nonnegative(summary.best_loss),
+      last_val_loss: nonnegative(summary.last_val_loss), average_speed: nonnegative(summary.average_speed),
+      loss_change_percent: numeric(summary.loss_change_percent),
+    },
+  };
+}
+export function mergeMetrics(...groups: TrainingMetric[][]): TrainingMetric[] {
+  const unique = new Map<number, TrainingMetric>();
+  for (const group of groups) for (const metric of group) unique.set(metric.global_step, metric);
+  return [...unique.values()].sort((a, b) => a.global_step - b.global_step);
 }
