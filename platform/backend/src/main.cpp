@@ -2,6 +2,7 @@
 #include <optional>
 #include <sstream>
 #include "hardware_monitor_routes.h"
+#include "training_monitor_routes.h"
 #include <drogon/drogon.h>
 #include <drogon/orm/DbClient.h>
 
@@ -1144,6 +1145,7 @@ int main() {
     );
 
     slm_hardware::registerHardwareMonitorRoutes(dbClient);
+    slm_monitor::registerTrainingMonitorRoutes(dbClient);
     drogon::app().addListener("0.0.0.0", 8080).run();
 
     return 0;

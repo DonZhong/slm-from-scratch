@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
-import { parseRuns, parseMetrics } from "./training-data";
+import { useEffect, useRef, useState } from "react";
+import { parseRuns, parseMetrics, mergeMetrics } from "./training-data";
 import type { TrainingMetric, TrainingRun } from "./training-data";
 
 export default function useTrainingData(
   autoRefresh: boolean,
   revision: number,
 ) {
+  const historyScope = useRef<AbortController | null>(null);
+  const [historyState, setHistoryState] = useState<{ runId: number | null; loading: boolean; error: string }>({ runId: null, loading: false, error: "" });
   const [runs, setRuns] = useState<TrainingRun[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(() => {
     const id = Number(new URLSearchParams(window.location.search).get("run"));
@@ -82,13 +84,11 @@ export default function useTrainingData(
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const items = parseMetrics(await response.json());
         if (!scope.signal.aborted)
-          setResult({
+          setResult((current) => ({
             runId,
-            items,
-            error: "",
-            loading: false,
-            updated: new Date(),
-          });
+            items: current?.runId === runId ? mergeMetrics(current.items, items) : items,
+            error: "", loading: false, updated: new Date(),
+          }));
       } catch (error) {
         if (!scope.signal.aborted)
           setResult((current) => ({
@@ -108,11 +108,37 @@ export default function useTrainingData(
       : null;
     return () => {
       scope.abort();
+      historyScope.current?.abort();
       if (timer !== null) window.clearInterval(timer);
     };
   }, [selectedId, autoRefresh, revision]);
 
+  async function loadEarlier() {
+    if (selectedId === null || result?.runId !== selectedId || !result.items.length || (historyState.runId === selectedId && historyState.loading)) return;
+    historyScope.current?.abort();
+    const scope = new AbortController();
+    historyScope.current = scope;
+    const runId = selectedId;
+    setHistoryState({ runId, loading: true, error: "" });
+    try {
+      const response = await fetch(`/api/training-runs/${runId}/metrics/history?limit=1000&before_step=${result.items[0].global_step}`, {
+        cache: "no-store", signal: AbortSignal.any([scope.signal, AbortSignal.timeout(12000)]),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      if (payload.run_id !== runId) throw new Error("历史实验编号不匹配");
+      const items = parseMetrics(payload);
+      if (!scope.signal.aborted) setResult((current) => current?.runId === runId ? { ...current, items: mergeMetrics(items, current.items) } : current);
+      if (!scope.signal.aborted) setHistoryState({ runId, loading: false, error: "" });
+    } catch (error) {
+      if (!scope.signal.aborted) setHistoryState({ runId, loading: false, error: error instanceof Error ? error.message : "历史查询失败" });
+    } finally {
+      if (historyScope.current === scope) setHistoryState((current) => ({ ...current, loading: false }));
+    }
+  }
+
   return {
+    loadEarlier, historyState: historyState.runId === selectedId ? historyState : { loading: false, error: "" },
     runs,
     selectedId,
     setSelectedId,

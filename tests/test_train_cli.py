@@ -53,6 +53,11 @@ def test_train_cli_reports_config_and_sampled_diagnostics():
     assert "diagnostics" not in metrics[1]
     assert "diagnostics" in metrics[2]
     assert metrics[2]["val_loss"] is not None
+    phases = [payload["phase"] for path, payload in received if path.endswith("/runtime")]
+    assert "training" in phases and "validation" in phases and phases[-1] == "completed"
+    assert config["optimizer"] == "AdamW"
+    assert config["train_samples"] > 0 and config["val_samples"] > 0
+    assert metrics[0]["diagnostics"]["pipeline"]["input"] >= 0
     assert received[-1][1] == {"status": "completed"}
 
 def test_train_cli_respects_max_steps() -> None:
@@ -140,3 +145,32 @@ def test_train_cli_checkpoint_roundtrip(tmp_path: Path) -> None:
 
     assert logits.shape == (1, 2, config.vocab_size)
     assert torch.isfinite(logits).all()
+
+
+def test_train_cli_reports_failure_when_metrics_api_rejects_step():
+    received = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            received.append((self.path, payload))
+            failed = self.path.endswith("/metrics")
+            self.send_response(503 if failed else 201)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "error" if failed else "ok", "item": {"id": 42}}).encode())
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    root = Path(__file__).resolve().parents[1]
+    try:
+        result = subprocess.run([sys.executable, str(root / "scripts/train.py"), "--max-steps", "2",
+                                 "--api-base-url", f"http://127.0.0.1:{server.server_port}"],
+                                cwd=root, capture_output=True, text=True, timeout=120)
+    finally:
+        server.shutdown(); server.server_close(); thread.join()
+    assert result.returncode != 0
+    assert "HTTP 503" in result.stderr
+    assert received[-1][1] == {"status": "failed"}
+    assert received[-2][1]["phase"] == "failed"

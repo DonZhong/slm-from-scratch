@@ -19,11 +19,14 @@ import {
   buildSeries,
   epochSummaries,
   metricsCsv,
+  mergeMetrics,
   numeric,
   summarize,
 } from "./training-data";
 import { number, scientific, dateText } from "./training-format";
 import useTrainingData from "./useTrainingData";
+import useTrainingMonitor from "./useTrainingMonitor";
+import TrainingMonitorCard from "./TrainingMonitorCard";
 import Internals from "./TrainingInternals";
 import { Stat, Plot } from "./TrainingCharts";
 import "./TrainingPanel.css";
@@ -38,14 +41,16 @@ const statusLabels: Record<string, string> = {
 export default function TrainingPanel() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [revision, setRevision] = useState(0);
-  const { runs, selectedId, setSelectedId, runsState, result } =
+  const { runs, selectedId, setSelectedId, runsState, result, loadEarlier, historyState } =
     useTrainingData(autoRefresh, revision);
   const [tab, setTab] = useState("overview");
   const [step, setStep] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [alpha, setAlpha] = useState(0.2);
   const [page, setPage] = useState(0);
-  const run = runs.find((item) => item.id === selectedId);
+  const monitoring = useTrainingMonitor(selectedId, step, autoRefresh, revision);
+  const listedRun = runs.find((item) => item.id === selectedId);
+  const run = listedRun ? { ...listedRun, config: monitoring?.monitor?.config ?? listedRun.config, status: monitoring?.monitor?.run_status ?? listedRun.status } : undefined;
   const metrics = useMemo(() => result?.items ?? [], [result?.items]);
   const current =
     (step === null
@@ -62,7 +67,8 @@ export default function TrainingPanel() {
     planned !== null && planned > 0 && latestStep !== undefined
       ? Math.min(100, (latestStep / planned) * 100)
       : null;
-  const diagnosticCount = metrics.filter((m) => m.diagnostics).length;
+  const internalMetrics = mergeMetrics(monitoring?.diagnostics ?? [], metrics);
+  const diagnosticCount = monitoring?.monitor?.summary.diagnostics_count ?? internalMetrics.filter((m) => m.diagnostics).length;
   const lastValidation = summary.validation;
   const gap =
     lastValidation && lastValidation.train_loss !== null
@@ -287,6 +293,7 @@ export default function TrainingPanel() {
               </small>
             </div>
           </div>
+          <TrainingMonitorCard monitor={monitoring?.monitor ?? null} error={monitoring?.error ?? ""} />
           {!metrics.length ? (
             <div className="lab-empty lab-card">
               <Activity size={32} />
@@ -353,8 +360,13 @@ export default function TrainingPanel() {
                   <p>
                     拖动查看已记录步骤；播放为历史回放。已加载 {metrics.length}{" "}
                     条，范围 Step {metrics[0].global_step}–{latestStep}
-                    （接口最多返回最近 1000 条）。
+                    （首次加载最近 1000 条，可继续读取更早记录）。
                   </p>
+                  <button type="button" className="lab-button" onClick={() => void loadEarlier()}
+                    disabled={historyState.loading || (monitoring?.monitor?.summary.total_metrics ?? metrics.length) <= metrics.length}>
+                    {historyState.loading ? "正在加载历史…" : "加载更早 1000 步"}
+                  </button>
+                  {historyState.error && <p className="lab-error">历史读取失败：{historyState.error}</p>}
                 </section>
                 <div className="lab-stats">
                   <Stat
@@ -607,7 +619,7 @@ export default function TrainingPanel() {
                     key={run.id}
                     run={run}
                     current={current}
-                    metrics={metrics}
+                    metrics={internalMetrics}
                   />
                 )}
                 {tab === "records" && (

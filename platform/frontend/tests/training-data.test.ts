@@ -4,6 +4,8 @@ import {
   buildSeries,
   epochSummaries,
   metricsCsv,
+  mergeMetrics,
+  parseMonitor,
   parseDiagnostic,
   parseMetrics,
   parseRuns,
@@ -103,4 +105,25 @@ test("legacy runs and absent or malformed diagnostic samples degrade safely", ()
   assert.equal(diagnostic!.attention, null);
   assert.equal(diagnostic!.layers[0].activation_mean, null);
   assert.throws(() => parseMetrics({ status: "error", items: [] }));
+});
+
+test("monitor checks experiment identity and preserves nullable whole-run statistics", () => {
+  const monitor = parseMonitor({ status: "ok", run_id: 7, config: { stride: 2 }, runtime: { phase: "validation" },
+    summary: { total_metrics: 1200, latest_step: 1500, diagnostics_count: 12, best_loss: 0, loss_change_percent: -10, average_speed: null } }, 7);
+  assert.equal(monitor.summary.total_metrics, 1200);
+  assert.equal(monitor.summary.best_loss, 0);
+  assert.equal(monitor.summary.loss_change_percent, -10);
+  assert.equal(monitor.summary.average_speed, null);
+  assert.throws(() => parseMonitor({ status: "ok", run_id: 8 }, 7));
+});
+test("history merge retains earlier pages, replaces latest updates and keeps sampled tensors", () => {
+  const early = parseMetrics({ status: "ok", items: [{ global_step: 1, train_loss: 2, diagnostics: { version: 1,
+    input_shape: [1, 4], shapes: { embeddings: [1, 4, 8] }, input_ids: [1, 2], target_ids: [2, 3], pipeline: { backward: 2, optimizer: -1 } } }] });
+  const later = parseMetrics({ status: "ok", items: [{ global_step: 1001, train_loss: 1 }] });
+  const updated = parseMetrics({ status: "ok", items: [{ global_step: 1001, train_loss: 0.5 }] });
+  const merged = mergeMetrics(early, later, updated);
+  assert.deepEqual(merged.map((m) => m.global_step), [1, 1001]);
+  assert.equal(merged[1].train_loss, 0.5);
+  assert.deepEqual(merged[0].diagnostics!.shapes.embeddings, [1, 4, 8]);
+  assert.equal(merged[0].diagnostics!.pipeline.optimizer, null);
 });

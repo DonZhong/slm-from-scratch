@@ -74,7 +74,8 @@ Implemented:
 - Python training-metrics reporting and host hardware collection.
 - React hardware dashboard and training-metrics panel.
 - Training workspace with step replay, EMA loss, perplexity, epoch summaries and CSV export.
-- Opt-in snapshots of layer activations, gradients, actual parameter updates, token predictions and causal attention.
+- Sampled layer activations, gradients, actual parameter updates, token predictions, causal attention, execution timings and tensor shapes.
+- Runtime phases, failure reporting, full-run statistics and paginated training history.
 
 Current limitations:
 
@@ -143,7 +144,7 @@ CLI parameters:
 | `--checkpoint-path` | Optional checkpoint output path |
 | `--api-base-url` | Optional monitoring backend URL |
 | `--run-name` | Optional experiment name when reporting to the backend |
-| `--diagnostics-interval` | Sample model internals every N steps; 0 disables sampling |
+| `--diagnostics-interval` | Sample model internals every N steps (default 10); 0 disables sampling |
 
 The training pipeline splits text into training and validation datasets before constructing token windows.
 

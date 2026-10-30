@@ -1,4 +1,4 @@
-"""Opt-in, bounded snapshots from an actual TinyGPT optimizer step.
+"""Bounded snapshots from an actual TinyGPT optimizer step.
 
 No extra forward pass is performed: hooks observe the training pass itself.
 Snapshots contain a short text excerpt and are intended for local experiments.
@@ -6,6 +6,7 @@ Snapshots contain a short text excerpt and are intended for local experiments.
 from __future__ import annotations
 
 import math
+import time
 from collections import defaultdict
 
 import torch
@@ -35,6 +36,16 @@ def diagnostic_train_step(
     snapshots: dict[str, dict] = {}
     observed: dict = {}
     handles = []
+    module_started = {}
+    module_ms = {}
+    timings = {}
+
+    def start_module(name):
+        def start(_module, _inputs):
+            if input_ids.is_cuda:
+                torch.cuda.synchronize(input_ids.device)
+            module_started[name] = time.perf_counter()
+        return start
     before = {
         name: parameter.detach().clone()
         for name, parameter in model.named_parameters()
@@ -43,6 +54,10 @@ def diagnostic_train_step(
 
     def activation_hook(name):
         def capture(_module, _inputs, output):
+            if input_ids.is_cuda:
+                torch.cuda.synchronize(input_ids.device)
+            module_ms[name] = (time.perf_counter() - module_started[name]) * 1000
+            observed.setdefault("shapes", {})[name] = list(output.shape)
             values = output.detach().float()
             snapshots[name] = {
                 "name": name,
@@ -82,11 +97,12 @@ def diagnostic_train_step(
     stages += [("final_norm", model.final_norm), ("lm_head", model.lm_head)]
     try:
         for name, module in stages:
+            handles.append(module.register_forward_pre_hook(start_module(name)))
             handles.append(module.register_forward_hook(activation_hook(name)))
         handles.append(model.lm_head.register_forward_hook(logits_hook))
         if model.blocks:
             handles.append(model.blocks[0].attention.attention_dropout.register_forward_pre_hook(attention_hook))
-        loss = train_step(model, optimizer, input_ids, targets)
+        loss = train_step(model, optimizer, input_ids, targets, timings=timings)
     finally:
         for handle in handles:
             handle.remove()
@@ -114,6 +130,16 @@ def diagnostic_train_step(
 
     return loss, {
         "version": 1,
+        "input_ids": input_ids[0, :16].tolist(),
+        "target_ids": targets[0, :16].tolist(),
+        "input_shape": list(input_ids.shape),
+        "pipeline": {
+            "embeddings": module_ms["embeddings"],
+            "transformer": sum(value for name, value in module_ms.items() if name.startswith("blocks.")) + module_ms["final_norm"],
+            "prediction": module_ms["lm_head"] + timings["loss"],
+            "backward": timings["backward"],
+            "optimizer": timings["optimizer"],
+        },
         "layers": layers,
         "gradient_norm": finite(math.sqrt(sum(item["gradient"] for item in sums.values()))),
         "parameter_norm": finite(math.sqrt(sum(item["parameter"] for item in sums.values()))),

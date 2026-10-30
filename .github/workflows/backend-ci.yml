@@ -52,6 +52,12 @@ jobs:
             'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
             < platform/database/migrations/003_training_diagnostics.sql
 
+      - name: Apply training monitor schema
+        run: |
+          docker compose exec -T postgres sh -c \
+            'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+            < platform/database/migrations/004_training_monitor.sql
+
       - name: Start backend
         run: docker compose up -d --wait backend
 
@@ -122,6 +128,9 @@ jobs:
 
       - name: Check training diagnostics API
         run: python3 scripts/check_training_diagnostics_api.py
+
+      - name: Check training monitor API
+        run: python3 scripts/check_training_monitor_api.py
 
       - name: Show logs on failure
         if: failure()
