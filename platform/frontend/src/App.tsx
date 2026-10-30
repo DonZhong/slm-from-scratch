@@ -1159,6 +1159,7 @@ function DetailModal({
 }
 
 export default function App() {
+  const [workspace, setWorkspace] = useState<"training" | "hardware">("training");
   const [latest, setLatest] = useState<Snapshot | null>(null);
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [apiOnline, setApiOnline] = useState(false);
@@ -1375,33 +1376,34 @@ export default function App() {
           </div>
           <div className="brand-copy">
             <strong>SLM<span> / LAB</span></strong>
-            <small>HARDWARE INTELLIGENCE</small>
+            <small>TRAINING OBSERVABILITY</small>
           </div>
         </a>
 
         <div className="side-label">OBSERVABILITY</div>
 
-        <a className="nav-item active" href="#overview">
+        <a className={`nav-item ${workspace === "hardware" ? "active" : ""}`} href="#overview" onClick={() => setWorkspace("hardware")}>
           <Monitor size={18} />
           <span>监控总览</span>
           <span className="nav-index">01</span>
         </a>
 
-        <a className="nav-item" href="#resource-trends">
+        <a className="nav-item" href="#resource-trends" onClick={() => setWorkspace("hardware")}>
           <Activity size={18} />
           <span>资源趋势</span>
           <span className="nav-index">02</span>
         </a>
 
-        <a className="nav-item" href="#components">
+        <a className="nav-item" href="#components" onClick={() => setWorkspace("hardware")}>
           <Database size={18} />
           <span>硬件组件</span>
           <span className="nav-index">03</span>
         </a>
 
         <a
-          className="nav-item"
+          className={`nav-item ${workspace === "training" ? "active" : ""}`}
           href="#training-monitor"
+          onClick={() => setWorkspace("training")}
         >
           <BrainCircuit size={18} />
           <span>模型训练</span>
@@ -1430,10 +1432,10 @@ export default function App() {
             <ChevronRight size={14} />
             <span>OBSERVABILITY</span>
             <ChevronRight size={14} />
-            <strong>OVERVIEW</strong>
+            <strong>{workspace === "training" ? "TRAINING" : "HARDWARE"}</strong>
           </div>
 
-          <div className="topbar-actions">
+          {workspace === "hardware" && <div className="topbar-actions">
             <div className={`connection-pill ${apiOnline ? "connected" : ""}`}>
               <span className="status-dot" />
               {apiOnline ? "API ONLINE" : "API OFFLINE"}
@@ -1451,9 +1453,15 @@ export default function App() {
               />
               <span>刷新数据</span>
             </button>
-          </div>
+          </div>}
         </header>
 
+        <nav className="mobile-workspaces" aria-label="切换工作区">
+          <button type="button" aria-pressed={workspace === "training"} onClick={() => setWorkspace("training")}><BrainCircuit size={16} />模型训练</button>
+          <button type="button" aria-pressed={workspace === "hardware"} onClick={() => setWorkspace("hardware")}><Monitor size={16} />硬件监控</button>
+        </nav>
+        {workspace === "training" && <TrainingPanel />}
+        {workspace === "hardware" && <>
         <section className="hero" id="overview">
           <div className="hero-copy">
             <div className="eyebrow">
@@ -1762,12 +1770,12 @@ export default function App() {
           </div>
         </section>
 
-        <TrainingPanel />
+        </>}
 
         <footer className="app-footer">
           <div>
             <span className="footer-mark">SLM</span>
-            <span>FROM SCRATCH · HARDWARE OBSERVABILITY</span>
+            <span>FROM SCRATCH · TRAINING & HARDWARE</span>
           </div>
           <div>刷新间隔 5 秒 · 所有图表基于已采集数据</div>
         </footer>

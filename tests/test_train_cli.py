@@ -1,12 +1,59 @@
 
 import subprocess
 import sys
+import os
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import torch
 
 from slm.config import TinyGPTConfig
 from slm.model import TinyGPT
+
+
+def test_train_cli_reports_config_and_sampled_diagnostics():
+    received = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            received.append((self.path, payload))
+            result = {"status": "ok", "item": {"id": 42}}
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    root = Path(__file__).resolve().parents[1]
+    try:
+        result = subprocess.run([
+            sys.executable, str(root / "scripts/train.py"), "--max-steps", "3",
+            "--batch-size", "8", "--diagnostics-interval", "3",
+            "--api-base-url", f"http://127.0.0.1:{server.server_port}",
+        ], cwd=root, env={**os.environ, "OMP_NUM_THREADS": "1"}, capture_output=True, text=True, timeout=120)
+        assert result.returncode == 0, result.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    config = received[0][1]["config"]
+    assert config["planned_steps"] == 3
+    assert config["parameter_count"] > 0
+    assert config["context_length"] == 16
+    metrics = [payload for path, payload in received if path.endswith("/metrics")]
+    assert [metric["global_step"] for metric in metrics] == [1, 2, 3]
+    assert "diagnostics" in metrics[0]
+    assert "diagnostics" not in metrics[1]
+    assert "diagnostics" in metrics[2]
+    assert metrics[2]["val_loss"] is not None
+    assert received[-1][1] == {"status": "completed"}
 
 def test_train_cli_respects_max_steps() -> None:
     project_root = Path(__file__).resolve().parents[1]

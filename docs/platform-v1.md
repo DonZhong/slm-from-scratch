@@ -67,6 +67,9 @@ docker compose exec -T postgres sh -c \
 docker compose exec -T postgres sh -c \
   'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   < platform/database/migrations/002_hardware_snapshots.sql
+docker compose exec -T postgres sh -c \
+  'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < platform/database/migrations/003_training_diagnostics.sql
 ```
 
 已有数据库需先核对已执行迁移，不重复初始化或删除数据卷。后续新增迁移的编号由两人事先协调。
@@ -81,7 +84,7 @@ curl -i http://127.0.0.1:8080/api/db/health
 curl -i http://127.0.0.1:5173/api/health
 ```
 
-浏览器访问 `http://127.0.0.1:5173`。当前 Vite 代理指向 Docker 服务名 `backend`，上述前端启动方式需要 Compose 网络；单独在宿主机运行 `npm run dev` 时须先调整代理目标。
+浏览器访问 `http://127.0.0.1:5173`。Vite 代理默认指向 Docker 服务名 `backend`，上述前端启动方式需要 Compose 网络；宿主机单独运行前端时，可在 `platform/frontend` 下执行 `SLM_API_PROXY_TARGET=http://127.0.0.1:8080 npm run dev`。
 
 宿主机 8080 或 5173 被占用会导致启动失败，先检查端口使用情况，再协调本地端口映射及 API 调用地址。
 

@@ -97,10 +97,11 @@ python scripts/check_hardware_snapshots_api.py
 cd platform/frontend
 npm ci
 npm run lint
+npm test
 npm run build
 ```
 
-界面改动还需连接后端，检查有数据、空数据、请求失败，以及切换实验后不显示上一实验的数据。当前 GitHub Actions 包含 Python 和后端检查，前端 lint/build 需在 PR 中提供本地结果。
+界面改动还需连接后端，检查有数据、空数据、请求失败，以及切换实验后不显示上一实验的数据。GitHub Actions 包含 Python、后端和前端检查；前端执行 lint、数据计算测试及生产构建。
 
 ### 仅修改文档或模板
 

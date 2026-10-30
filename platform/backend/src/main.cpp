@@ -1,5 +1,6 @@
 #include <cmath>
 #include <optional>
+#include <sstream>
 #include "hardware_monitor_routes.h"
 #include <drogon/drogon.h>
 #include <drogon/orm/DbClient.h>
@@ -57,6 +58,17 @@ bool parsePositiveInt64(
     } catch (...) {
         return false;
     }
+}
+
+Json::Value storedJson(const std::string& text) {
+    Json::CharReaderBuilder builder;
+    Json::Value value;
+    std::string errors;
+    std::istringstream stream(text);
+    if (!Json::parseFromStream(builder, stream, &value, &errors)) {
+        throw std::runtime_error("Invalid stored JSON");
+    }
+    return value;
 }
 
 int main() {
@@ -217,11 +229,24 @@ int main() {
                     modelName = data["model_name"].asString();
                 }
 
+                const Json::Value config = data.get("config", Json::Value(Json::objectValue));
+                Json::StreamWriterBuilder writer;
+                const std::string configText = Json::writeString(writer, config);
+                if (!config.isObject() || configText.size() > 16384) {
+                    Json::Value body;
+                    body["status"] = "error";
+                    body["message"] = "config must be an object of at most 16 KiB";
+                    auto response = drogon::HttpResponse::newHttpJsonResponse(body);
+                    response->setStatusCode(drogon::k400BadRequest);
+                    reply(response);
+                    return;
+                }
+
                 // 4. 插入数据库并取回自动生成的实验 ID
                 dbClient->execSqlAsync(
                     "INSERT INTO training_runs "
-                    "(name, model_name, dataset_name) "
-                    "VALUES ($1, $2, $3) "
+                    "(name, model_name, dataset_name, config) "
+                    "VALUES ($1, $2, $3, $4::jsonb) "
                     "RETURNING id, name, model_name, dataset_name, "
                     "status, created_at::text AS created_at",
 
@@ -274,7 +299,8 @@ int main() {
 
                     name,
                     modelName,
-                    datasetName
+                    datasetName,
+                    configText
                 );
             },
             {drogon::Post}
@@ -291,7 +317,7 @@ int main() {
             auto reply = std::move(callback);
 
             dbClient->execSqlAsync(
-                "SELECT id, name, model_name, dataset_name, status, "
+                "SELECT id, name, model_name, dataset_name, status, config::text AS config, "
                 "created_at::text AS created_at, "
                 "COALESCE(started_at::text, '') AS started_at, "
                 "COALESCE(finished_at::text, '') AS finished_at "
@@ -321,6 +347,7 @@ int main() {
                             row["dataset_name"].as<std::string>();
                         item["status"] =
                             row["status"].as<std::string>();
+                        item["config"] = storedJson(row["config"].as<std::string>());
                         item["created_at"] =
                             row["created_at"].as<std::string>();
                         item["started_at"] =
@@ -731,6 +758,14 @@ int main() {
                 }
             }
 
+            const Json::Value diagnostics = data.get("diagnostics", Json::Value(Json::nullValue));
+            Json::StreamWriterBuilder writer;
+            const std::string diagnosticsText = Json::writeString(writer, diagnostics);
+            if ((!diagnostics.isNull() && !diagnostics.isObject()) || diagnosticsText.size() > 65536) {
+                sendError(drogon::k400BadRequest, "diagnostics must be an object or null, at most 64 KiB");
+                return;
+            }
+
             // 4. 准备异步数据库操作
             auto reply = std::move(callback);
 
@@ -742,7 +777,8 @@ int main() {
                 trainLoss,
                 valLoss,
                 learningRate,
-                tokensPerSecond
+                tokensPerSecond,
+                diagnostics
             ](const drogon::orm::Result& result) {
                             // ON CONFLICT DO NOTHING 时，
                 // 如果没有插入新记录，RETURNING id 会返回空结果。
@@ -777,6 +813,7 @@ int main() {
                 item["tokens_per_second"] = tokensPerSecond
                     ? Json::Value(*tokensPerSecond)
                     : Json::Value(Json::nullValue);
+                item["diagnostics"] = diagnostics;
 
                 Json::Value body;
                 body["status"] = "ok";
@@ -866,8 +903,8 @@ int main() {
                 dbClient->execSqlAsync(
                     "INSERT INTO training_metrics "
                     "(run_id, global_step, epoch, train_loss, "
-                    "val_loss, learning_rate, tokens_per_second) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, $7) "
+                    "val_loss, learning_rate, tokens_per_second, diagnostics) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8::jsonb, 'null'::jsonb)) "
                     "ON CONFLICT (run_id, global_step) DO NOTHING "
                     "RETURNING id",
                     onSuccess,
@@ -878,14 +915,15 @@ int main() {
                     trainLoss,
                     *valLoss,
                     learningRate,
-                    *tokensPerSecond
+                    *tokensPerSecond,
+                    diagnosticsText
                 );
             } else if (valLoss && !tokensPerSecond) {
                 dbClient->execSqlAsync(
                     "INSERT INTO training_metrics "
                     "(run_id, global_step, epoch, train_loss, "
-                    "val_loss, learning_rate, tokens_per_second) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, NULL) "
+                    "val_loss, learning_rate, tokens_per_second, diagnostics) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, NULL, NULLIF($7::jsonb, 'null'::jsonb)) "
                     "ON CONFLICT (run_id, global_step) DO NOTHING "
                     "RETURNING id",
                     onSuccess,
@@ -895,14 +933,15 @@ int main() {
                     epoch,
                     trainLoss,
                     *valLoss,
-                    learningRate
+                    learningRate,
+                    diagnosticsText
                 );
             } else if (!valLoss && tokensPerSecond) {
                 dbClient->execSqlAsync(
                     "INSERT INTO training_metrics "
                     "(run_id, global_step, epoch, train_loss, "
-                    "val_loss, learning_rate, tokens_per_second) "
-                    "VALUES ($1, $2, $3, $4, NULL, $5, $6) "
+                    "val_loss, learning_rate, tokens_per_second, diagnostics) "
+                    "VALUES ($1, $2, $3, $4, NULL, $5, $6, NULLIF($7::jsonb, 'null'::jsonb)) "
                     "ON CONFLICT (run_id, global_step) DO NOTHING "
                     "RETURNING id",
                     onSuccess,
@@ -912,14 +951,15 @@ int main() {
                     epoch,
                     trainLoss,
                     learningRate,
-                    *tokensPerSecond
+                    *tokensPerSecond,
+                    diagnosticsText
                 );
             } else {
                 dbClient->execSqlAsync(
                     "INSERT INTO training_metrics "
                     "(run_id, global_step, epoch, train_loss, "
-                    "val_loss, learning_rate, tokens_per_second) "
-                    "VALUES ($1, $2, $3, $4, NULL, $5, NULL) "
+                    "val_loss, learning_rate, tokens_per_second, diagnostics) "
+                    "VALUES ($1, $2, $3, $4, NULL, $5, NULL, NULLIF($6::jsonb, 'null'::jsonb)) "
                     "ON CONFLICT (run_id, global_step) DO NOTHING "
                     "RETURNING id",
                     onSuccess,
@@ -928,7 +968,8 @@ int main() {
                     globalStep,
                     epoch,
                     trainLoss,
-                    learningRate
+                    learningRate,
+                    diagnosticsText
                 );
             }
         },
@@ -995,10 +1036,10 @@ int main() {
                     //    最终按 global_step 从小到大返回。
                     dbClient->execSqlAsync(
                         "SELECT id, global_step, epoch, train_loss, "
-                        "val_loss, learning_rate, tokens_per_second "
+                        "val_loss, learning_rate, tokens_per_second, diagnostics::text AS diagnostics "
                         "FROM ("
                         " SELECT id, global_step, epoch, train_loss, "
-                        " val_loss, learning_rate, tokens_per_second "
+                        " val_loss, learning_rate, tokens_per_second, diagnostics "
                         " FROM training_metrics "
                         " WHERE run_id = $1 "
                         " ORDER BY global_step DESC "
@@ -1055,6 +1096,9 @@ int main() {
                                         row["tokens_per_second"].as<double>()
                                     );
 
+                                item["diagnostics"] = row["diagnostics"].isNull()
+                                    ? Json::Value(Json::nullValue)
+                                    : storedJson(row["diagnostics"].as<std::string>());
                                 body["items"].append(item);
                             }
 

@@ -1,8 +1,6 @@
 
-@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap");
-
 :root {
-  font-family: Inter, "Noto Sans SC", system-ui, sans-serif;
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   color: #e8f2ff;
   background: #050b14;
   font-synthesis: none;
@@ -22,7 +20,7 @@
   --cyan: #54e7ff;
   --green: #48e3b5;
   --purple: #a69aff;
-  --mono: "DM Mono", monospace;
+  --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 }
 
 * {

@@ -16,6 +16,7 @@ from slm.data import NextTokenDataset, split_text
 from slm.model import TinyGPT
 from slm.tokenizer import CharacterTokenizer
 from slm.training import evaluate, train_step
+from slm.diagnostics import diagnostic_train_step
 
 
 def post_api_json(
@@ -151,8 +152,14 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Dropout probability.",
+    parser.add_argument(
+        "--diagnostics-interval", type=int, default=0,
+        help="Capture model internals every N steps (0 disables; includes short training text excerpts).",
     )
     args = parser.parse_args()
+
+    if args.diagnostics_interval < 0:
+        parser.error("--diagnostics-interval must be zero or greater")
 
     if args.epochs <= 0:
         parser.error("--epochs must be positive")
@@ -308,6 +315,17 @@ def main() -> None:
                 "name": run_name,
                 "model_name": "TinyGPT",
                 "dataset_name": dataset_name,
+                "config": {
+                    **asdict(config),
+                    "epochs": args.epochs,
+                    "batch_size": args.batch_size,
+                    "learning_rate": args.learning_rate,
+                    "planned_steps": min(args.epochs * len(loader), args.max_steps or args.epochs * len(loader)),
+                    "batches_per_epoch": len(loader),
+                    "parameter_count": sum(p.numel() for p in model.parameters()),
+                    "device": str(device),
+                    "diagnostics_interval": args.diagnostics_interval,
+                },
             },
         )
 
@@ -360,12 +378,22 @@ def main() -> None:
             # 1. 测量本次训练 step 的耗时
             step_started = time.perf_counter()
 
-            loss = train_step(
-                model=model,
-                optimizer=optimizer,
-                input_ids=input_ids,
-                targets=targets,
+            diagnostics = None
+            capture_diagnostics = args.diagnostics_interval > 0 and (
+                global_step == 0
+                or (global_step + 1) % args.diagnostics_interval == 0
+                or batch_index == len(loader)
+                or global_step + 1 == args.max_steps
             )
+            if capture_diagnostics:
+                loss, diagnostics = diagnostic_train_step(model, optimizer, input_ids, targets, tokenizer)
+            else:
+                loss = train_step(
+                    model=model,
+                    optimizer=optimizer,
+                    input_ids=input_ids,
+                    targets=targets,
+                )
 
             # item() 将 loss 转换为 Python 数值，
             # 同时确保需要读取的 GPU 计算结果已经可用
@@ -399,6 +427,8 @@ def main() -> None:
                 "tokens_per_second": tokens_per_second,
                 "val_loss": None,
             }
+            if diagnostics is not None:
+                metric["diagnostics"] = diagnostics
 
 
             is_last_batch = batch_index == len(loader)
