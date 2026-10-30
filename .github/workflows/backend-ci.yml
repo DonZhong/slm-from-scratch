@@ -46,6 +46,12 @@ jobs:
             'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
             < platform/database/migrations/002_hardware_snapshots.sql
 
+      - name: Apply training diagnostics schema
+        run: |
+          docker compose exec -T postgres sh -c \
+            'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+            < platform/database/migrations/003_training_diagnostics.sql
+
       - name: Start backend
         run: docker compose up -d --wait backend
 
@@ -113,6 +119,9 @@ jobs:
 
       - name: Check hardware snapshots API
         run: python3 scripts/check_hardware_snapshots_api.py
+
+      - name: Check training diagnostics API
+        run: python3 scripts/check_training_diagnostics_api.py
 
       - name: Show logs on failure
         if: failure()

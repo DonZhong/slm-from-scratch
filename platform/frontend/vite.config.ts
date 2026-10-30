@@ -19,7 +19,7 @@ export default defineConfig({
     // 前端 API 请求转发至 C++ Drogon
     proxy: {
       "/api": {
-        target: "http://backend:8080",
+        target: process.env.SLM_API_PROXY_TARGET || "http://backend:8080",
         changeOrigin: true,
       },
     },

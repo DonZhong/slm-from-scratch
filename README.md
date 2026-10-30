@@ -12,6 +12,7 @@
 - [协作指南](CONTRIBUTING.md)：权限、建议分工、分支与合并流程、检查命令。
 - [双人开发需求与计划](docs/development-plan.md)：当前基线、训练监控闭环与推理功能的任务及验收条件。
 - [平台说明](docs/platform-v1.md)：已有服务、API 与本地启动步骤。
+- [训练工作台](docs/training-workspace.md)：训练过程回看、逐层诊断、注意力与预测概率，以及升级步骤。
 
 ## Goals
 
@@ -72,6 +73,8 @@ Implemented:
 - C++ Drogon APIs and PostgreSQL persistence for training runs, metrics, and hardware snapshots.
 - Python training-metrics reporting and host hardware collection.
 - React hardware dashboard and training-metrics panel.
+- Training workspace with step replay, EMA loss, perplexity, epoch summaries and CSV export.
+- Opt-in snapshots of layer activations, gradients, actual parameter updates, token predictions and causal attention.
 
 Current limitations:
 
@@ -138,6 +141,9 @@ CLI parameters:
 | `--learning-rate` | AdamW learning rate |
 | `--max-steps` | Optional limit on optimizer updates |
 | `--checkpoint-path` | Optional checkpoint output path |
+| `--api-base-url` | Optional monitoring backend URL |
+| `--run-name` | Optional experiment name when reporting to the backend |
+| `--diagnostics-interval` | Sample model internals every N steps; 0 disables sampling |
 
 The training pipeline splits text into training and validation datasets before constructing token windows.
 
