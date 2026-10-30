@@ -64,6 +64,11 @@ COPY --from=build \
     /src/build/slm_platform_backend \
     ./slm_platform_backend
 
+# 创建 Drogon 上传临时目录，并授权给后端运行用户
+RUN mkdir -p /app/uploads/tmp \
+    && chown -R 10001:10001 /app/uploads
+
+# 使用非 root 用户运行后端
 USER 10001:10001
 
 EXPOSE 8080
